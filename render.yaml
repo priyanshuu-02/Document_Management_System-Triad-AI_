@@ -51,3 +51,6 @@ services:
     envVars:
       - key: BACKEND_URL
         sync: false            # public URL of the backend, e.g. https://triad-dms-backend.onrender.com
+      - key: NGINX_RESOLVER
+        value: "1.1.1.1 8.8.8.8" # public DNS: Render's internal DNS routes *.onrender.com
+                                 # to the private network, which free services can't receive
