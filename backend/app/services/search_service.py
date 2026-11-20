@@ -1,13 +1,13 @@
-"""Search across document titles, dynamic metadata and OCR-extracted text.
+"""Search across document names, metadata and OCR text.
 
-Matching runs inside MongoDB (case-insensitive substring match):
+The search runs inside MongoDB and ignores upper/lower case.
 
-* filename, division and metadata (via the denormalised ``metadata_text``)
-  are searchable across all divisions, so a user can discover a document and
-  request access to it.  Only metadata is exposed for such results.
-* OCR text is matched only within documents the user may already read
-  (their own division, approved requests, or any document for admins), so a
-  search can never reveal confidential content from another division.
+* Names, divisions and metadata can be searched across all divisions, so a
+  user can find a document and then ask for access to it. For those results
+  we only show the metadata.
+* The OCR text (what's written inside the file) is only searched in
+  documents the user can already open. So search never leaks what's inside
+  another division's documents.
 """
 import re
 import logging
@@ -62,7 +62,7 @@ class SearchService:
         db = get_db()
         user_division = current_user.get("division") if current_user else None
 
-        # One query loads the user's requests; every result is then checked in memory.
+        # Load the user's access once, then check each result without more queries.
         access = AccessContext(db, current_user)
         query = SearchService.build_query(clean_query, access)
         docs = list(db.documents.find(query).sort("created_at", -1).limit(MAX_RESULTS))

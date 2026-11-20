@@ -1,102 +1,138 @@
+"""Admin endpoints: metadata fields, users, roles, divisions and the audit log.
+
+Everything here needs an admin login, except reading the metadata field list,
+which the sign-up page, upload form and filters all use.
+"""
 import re
 from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify
 from bson import ObjectId
+from bson.errors import InvalidId
 from app.db import get_db
 from app.models.metadata_field import MetadataFieldModel
 from app.models.audit_log import AuditLogModel
 from app.models.user import UserModel
 from app.middleware.auth_middleware import optional_auth, admin_required
-from app.seed import seed_metadata_fields
+from app.seed import seed_metadata_fields, division_allowed, DIVISION_FIELD
+from app.validation import json_body, text, is_safe_key
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 
+FIELD_TYPES = ("select", "text", "number")
+MAX_OPTIONS = 100
 
-def ensure_default_fields():
-    """Seed the starter metadata schema the first time it is read."""
-    seed_metadata_fields(get_db())
+
+def _object_id(value):
+    try:
+        return ObjectId(value)
+    except (InvalidId, TypeError):
+        return None
+
+
+def _clean_options(options):
+    """Keep only non-empty text options, without duplicates."""
+    cleaned = []
+    for opt in options if isinstance(options, list) else []:
+        opt = str(opt).strip()[:100] if isinstance(opt, (str, int, float)) else ""
+        if opt and opt not in cleaned:
+            cleaned.append(opt)
+    return cleaned[:MAX_OPTIONS]
+
+
+def _name_taken(db, name, except_id=None):
+    """Is another field already using this name? (ignoring upper/lower case)"""
+    query = {"name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}}
+    if except_id:
+        query["_id"] = {"$ne": except_id}
+    return db.metadata_fields.find_one(query) is not None
+
+
+def _is_division_field(field):
+    return (field.get("name") or "").lower() == DIVISION_FIELD.lower()
+
 
 @admin_bp.route("/verify", methods=["GET"])
 @admin_required
 def verify_admin_access():
-    """Verify administrator privileges"""
     return jsonify({"authorized": True, "message": "Admin privileges verified"}), 200
+
 
 @admin_bp.route("/metadata-fields", methods=["GET"])
 @optional_auth
 def get_metadata_fields():
-    """Read dynamic metadata fields (allowed for all users so filters/upload form work)"""
-    ensure_default_fields()
+    """List the metadata fields. Open to everyone, because the sign-up page
+    needs the division list and the upload form and filters need the fields."""
     db = get_db()
+    seed_metadata_fields(db)
     fields = list(db.metadata_fields.find().sort("created_at", 1))
     return jsonify({"fields": [MetadataFieldModel.sanitize(f) for f in fields]}), 200
+
 
 @admin_bp.route("/metadata-fields", methods=["POST"])
 @admin_required
 def add_metadata_field():
-    """Only administrators can create new dynamic metadata fields"""
-    data = request.get_json(silent=True) or {}
-    name = data.get("name", "").strip()
-    field_type = data.get("field_type", "text").strip().lower()
-    options = data.get("options", [])
-    required = bool(data.get("required", False))
+    data = json_body()
+    name = text(data.get("name"), 100)
+    field_type = text(data.get("field_type")).lower() or "text"
+    options = _clean_options(data.get("options"))
 
-    if not name:
-        return jsonify({"error": "Field name is required"}), 400
+    if not name or not is_safe_key(name):
+        return jsonify({"error": "Field name is required and can't start with '$' or contain '.'"}), 400
+    if field_type not in FIELD_TYPES:
+        return jsonify({"error": f"Field type must be one of: {', '.join(FIELD_TYPES)}"}), 400
+    if field_type == "select" and not options:
+        return jsonify({"error": "A dropdown field needs at least one option"}), 400
 
     db = get_db()
-    existing = db.metadata_fields.find_one({"name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}})
-    if existing:
+    if _name_taken(db, name):
         return jsonify({"error": f"Field '{name}' already exists"}), 409
 
-    doc = MetadataFieldModel.create_field(name=name, field_type=field_type, options=options, required=required)
-    result = db.metadata_fields.insert_one(doc)
-    doc["_id"] = result.inserted_id
+    doc = MetadataFieldModel.create_field(name=name, field_type=field_type, options=options,
+                                          required=bool(data.get("required", False)))
+    doc["_id"] = db.metadata_fields.insert_one(doc).inserted_id
+    return jsonify({"message": f"Field '{name}' created successfully", "field": MetadataFieldModel.sanitize(doc)}), 201
 
-    return jsonify({
-        "message": f"Field '{name}' created successfully",
-        "field": MetadataFieldModel.sanitize(doc)
-    }), 201
 
 @admin_bp.route("/metadata-fields/<field_id>", methods=["PUT"])
 @admin_required
 def update_metadata_field(field_id):
-    """
-    Update an existing dynamic metadata field schema.
-    This fulfills the requirement that metadata fields can be configured,
-    extended, and edited later without hardcoding.
-    """
-    db = get_db()
-    try:
-        field_obj_id = ObjectId(field_id)
-    except Exception:
+    """Edit a field: rename it, change its type, or add/remove options
+    (for example adding a new Report Type)."""
+    field_obj_id = _object_id(field_id)
+    if not field_obj_id:
         return jsonify({"error": "Invalid field ID"}), 400
 
+    db = get_db()
     existing = db.metadata_fields.find_one({"_id": field_obj_id})
     if not existing:
         return jsonify({"error": "Field not found"}), 404
 
-    data = request.get_json(silent=True) or {}
+    data = json_body()
     update_doc = {}
+    division_field = _is_division_field(existing)
 
-    if "name" in data and data["name"].strip():
-        new_name = data["name"].strip()
-        # Check if the renamed field conflicts with another existing field
-        duplicate = db.metadata_fields.find_one({
-            "_id": {"$ne": field_obj_id},
-            "name": {"$regex": f"^{re.escape(new_name)}$", "$options": "i"}
-        })
-        if duplicate:
+    new_name = text(data.get("name"), 100)
+    if new_name and new_name != existing.get("name"):
+        if division_field:
+            # Access control is built on the "Division" field, so it keeps its name.
+            return jsonify({"error": "The Division field can't be renamed"}), 400
+        if not is_safe_key(new_name):
+            return jsonify({"error": "Field name can't start with '$' or contain '.'"}), 400
+        if _name_taken(db, new_name, except_id=field_obj_id):
             return jsonify({"error": f"Another field with name '{new_name}' already exists"}), 409
         update_doc["name"] = new_name
 
-    if "field_type" in data and data["field_type"].strip().lower() in ["select", "text", "number"]:
-        update_doc["field_type"] = data["field_type"].strip().lower()
+    field_type = text(data.get("field_type")).lower()
+    if field_type in FIELD_TYPES and not division_field:
+        update_doc["field_type"] = field_type
 
-    if "options" in data and isinstance(data["options"], list):
-        update_doc["options"] = [str(opt).strip() for opt in data["options"] if str(opt).strip()]
+    if "options" in data:
+        options = _clean_options(data.get("options"))
+        if division_field and not options:
+            return jsonify({"error": "There must be at least one division"}), 400
+        update_doc["options"] = options
 
-    if "required" in data:
+    if "required" in data and not division_field:
         update_doc["required"] = bool(data["required"])
 
     if not update_doc:
@@ -104,25 +140,24 @@ def update_metadata_field(field_id):
 
     update_doc["updated_at"] = datetime.now(timezone.utc)
     db.metadata_fields.update_one({"_id": field_obj_id}, {"$set": update_doc})
-
     updated = db.metadata_fields.find_one({"_id": field_obj_id})
-    return jsonify({
-        "message": "Metadata field updated successfully",
-        "field": MetadataFieldModel.sanitize(updated)
-    }), 200
+    return jsonify({"message": "Metadata field updated successfully", "field": MetadataFieldModel.sanitize(updated)}), 200
+
 
 @admin_bp.route("/metadata-fields/<field_id>", methods=["DELETE"])
 @admin_required
 def delete_metadata_field(field_id):
-    """Only administrators can delete dynamic metadata fields"""
+    field_obj_id = _object_id(field_id)
+    if not field_obj_id:
+        return jsonify({"error": "Invalid field ID"}), 400
     db = get_db()
-    try:
-        res = db.metadata_fields.delete_one({"_id": ObjectId(field_id)})
-        if res.deleted_count == 0:
-            return jsonify({"error": "Field not found"}), 404
-        return jsonify({"message": "Field deleted successfully"}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+    field = db.metadata_fields.find_one({"_id": field_obj_id})
+    if not field:
+        return jsonify({"error": "Field not found"}), 404
+    if _is_division_field(field):
+        return jsonify({"error": "The Division field is needed for access control and can't be deleted"}), 400
+    db.metadata_fields.delete_one({"_id": field_obj_id})
+    return jsonify({"message": "Field deleted successfully"}), 200
 
 @admin_bp.route("/audit-events", methods=["GET"])
 @admin_required
@@ -175,23 +210,19 @@ def list_users():
 @admin_bp.route("/users/<user_id>/role", methods=["POST"])
 @admin_required
 def update_user_role(user_id):
-    """
-    Admin-only endpoint to promote or update a registered user's role.
-    Prevents self-selected admin roles and records an immutable audit event.
-    """
+    """Make a user an admin, or change an admin back to a normal user."""
     db = get_db()
-    try:
-        user_obj_id = ObjectId(user_id)
-    except Exception:
+    user_obj_id = _object_id(user_id)
+    if not user_obj_id:
         return jsonify({"error": "Invalid user ID"}), 400
 
     target_user = db.users.find_one({"_id": user_obj_id})
     if not target_user:
         return jsonify({"error": "User not found"}), 404
 
-    data = request.get_json(silent=True) or {}
-    new_role = data.get("role", "admin").strip().lower()
-    note = data.get("note", "").strip()
+    data = json_body()
+    new_role = (text(data.get("role")) or "admin").lower()
+    note = text(data.get("note"), 500)
 
     if new_role not in ["admin", "user"]:
         return jsonify({"error": "Role must be 'admin' or 'user'"}), 400
@@ -199,7 +230,7 @@ def update_user_role(user_id):
     actor = getattr(request, "current_user", {})
     actor_id = str(actor.get("_id", actor.get("user_id", "")))
 
-    # Prevent admin from demoting themselves (avoids accidental lockouts)
+    # An admin can't demote themselves, so the system is never left without one by accident.
     if actor_id == str(target_user["_id"]) and new_role != "admin":
         return jsonify({"error": "Administrators cannot demote their own account"}), 400
 
@@ -213,7 +244,7 @@ def update_user_role(user_id):
     # Update role
     db.users.update_one({"_id": user_obj_id}, {"$set": {"role": new_role}})
 
-    # Append immutable audit log entry
+    # Record the change in the audit log
     audit_event = {
         "event_type": "user_role_updated",
         "subject_user_id": str(target_user["_id"]),
@@ -240,21 +271,17 @@ def update_user_role(user_id):
 @admin_required
 def promote_user_shortcut():
     """Shortcut endpoint to promote a user to admin by user_id, username, or email."""
-    data = request.get_json(silent=True) or {}
-    user_id = data.get("user_id")
-    identifier = data.get("username") or data.get("email")
+    data = json_body()
+    user_id = text(data.get("user_id"))
+    identifier = text(data.get("username")) or text(data.get("email"))
 
     db = get_db()
     target_user = None
 
-    if user_id:
-        try:
-            target_user = db.users.find_one({"_id": ObjectId(user_id)})
-        except Exception:
-            pass
+    if user_id and _object_id(user_id):
+        target_user = db.users.find_one({"_id": _object_id(user_id)})
     elif identifier:
-        clean = identifier.strip()
-        target_user = db.users.find_one({"$or": [{"username": clean}, {"email": clean.lower()}]})
+        target_user = db.users.find_one({"$or": [{"username": identifier}, {"email": identifier.lower()}]})
 
     if not target_user:
         return jsonify({"error": "User to promote not found"}), 404
@@ -265,27 +292,24 @@ def promote_user_shortcut():
 @admin_bp.route("/users/<user_id>/division", methods=["POST"])
 @admin_required
 def update_user_division(user_id):
-    """
-    Admin-only endpoint to reassign a user's division.
-    Allows administrators to transfer users between divisions (e.g. Division A -> Division B)
-    as organizational roles change, and logs an immutable audit event.
-    """
+    """Move a user to another division (for example from Division A to Division B)."""
     db = get_db()
-    try:
-        user_obj_id = ObjectId(user_id)
-    except Exception:
+    user_obj_id = _object_id(user_id)
+    if not user_obj_id:
         return jsonify({"error": "Invalid user ID"}), 400
 
     target_user = db.users.find_one({"_id": user_obj_id})
     if not target_user:
         return jsonify({"error": "User not found"}), 404
 
-    data = request.get_json(silent=True) or {}
-    new_division = (data.get("division") or "").strip()
-    note = (data.get("note") or "").strip()
+    data = json_body()
+    new_division = text(data.get("division"), 100)
+    note = text(data.get("note"), 500)
 
     if not new_division:
         return jsonify({"error": "Target division is required"}), 400
+    if not division_allowed(db, new_division):
+        return jsonify({"error": f"'{new_division}' is not one of the configured divisions"}), 400
 
     old_division = target_user.get("division", "Unknown")
     if old_division == new_division:
@@ -297,10 +321,9 @@ def update_user_division(user_id):
     actor = getattr(request, "current_user", {})
     actor_id = str(actor.get("_id", actor.get("user_id", "")))
 
-    # Update the user's division in the database
     db.users.update_one({"_id": user_obj_id}, {"$set": {"division": new_division}})
 
-    # Record the transfer in the immutable audit trail
+    # Record the move in the audit log
     audit_event = {
         "event_type": "user_division_updated",
         "subject_user_id": str(target_user["_id"]),

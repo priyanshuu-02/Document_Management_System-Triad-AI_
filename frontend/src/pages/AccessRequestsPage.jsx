@@ -1,3 +1,5 @@
+// Page 4: access requests. 'Incoming' shows requests for my division's documents,
+// which I can approve or reject. 'Sent' shows the requests I made to other divisions.
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import client from '../api/client';
@@ -56,7 +58,7 @@ export default function AccessRequestsPage() {
     }
   };
 
-  // Smart tab selection once data first arrives (unless the URL picked a tab):
+  // Pick a sensible tab once the data arrives (unless the URL already chose one):
   // with no incoming requests but some sent ones, open the Sent tab.
   const tabChosen = useRef(urlTab === 'sent' || urlTab === 'incoming');
   useEffect(() => {
@@ -127,7 +129,7 @@ export default function AccessRequestsPage() {
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-16 sm:pt-3.5 pb-8 space-y-5">
       
-      {/* Page Header (Shifted Up) with Sub-navbar Tabs Underneath */}
+      {/* Page title, with the Incoming / Sent tabs underneath */}
       <div className="space-y-4 pb-5 border-b border-slate-200/80 dark:border-[#1e2636]">
         <div className="pr-0 sm:pr-72 md:pr-80">
           <div className="flex items-center space-x-2.5">

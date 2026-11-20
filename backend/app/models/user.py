@@ -1,3 +1,4 @@
+"""How a user is stored, and password hashing (bcrypt, so we never keep the real password)."""
 from datetime import datetime, timezone
 import bcrypt
 

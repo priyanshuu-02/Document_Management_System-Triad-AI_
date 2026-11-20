@@ -1,8 +1,8 @@
+"""How an audit log entry is stored. These are only ever added, never changed."""
 from datetime import datetime, timezone
 
 
 class AuditLogModel:
-    """Factory/sanitizer for immutable access-control audit events."""
 
     @staticmethod
     def create_event(event_type, request_doc, actor, note=None):

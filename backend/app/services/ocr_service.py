@@ -1,16 +1,15 @@
-"""Text extraction for uploaded documents.
+"""Gets the text out of uploaded files so they can be searched.
 
-Extraction runs in tiers and stops at the first one that yields text:
+We try three ways, in order, and stop as soon as one finds text:
 
-1. Embedded text  - digital PDFs (pypdf, then pdfplumber) and plain-text files.
-                    Fast and exact; no OCR needed.
-2. Tesseract OCR  - images, and PDFs without a text layer (scanned pages are
-                    rendered with PyMuPDF).  Runs locally inside the container.
-3. LLMWhisperer   - optional cloud OCR (Unstract), used only when
-                    UNSTRACT_API_KEY is set and Tesseract found too little text.
+1. Text already in the PDF - most PDFs made on a computer have it. Fast and exact.
+2. Tesseract OCR - for images and scanned PDFs (pages are turned into
+   pictures with PyMuPDF first). Runs inside our own container, free and offline.
+3. LLMWhisperer - an optional cloud OCR service. Only used if
+   UNSTRACT_API_KEY is set and Tesseract found almost nothing.
 
-Every tier fails soft: a broken file or missing engine yields "" and the
-upload still succeeds; the reason is logged.
+If a file is broken or a step fails, we just store no text and log why.
+The upload itself still works.
 """
 import io
 import logging
@@ -41,8 +40,8 @@ UNSTRACT_URL = (
     "https://llmwhisperer-api.us-central.unstract.com/api/v2/whisper"
     "?processing_mode=sync&output_mode=layout_preserving&mode=high_quality"
 )
-# Small scans are upscaled to roughly this width before OCR; Tesseract is
-# most accurate at around 300 DPI-equivalent character sizes.
+# Small images are enlarged to about this width first, because Tesseract
+# reads tiny text badly.
 MIN_OCR_WIDTH = 1500
 
 
@@ -57,7 +56,7 @@ class OCRService:
 
     @staticmethod
     def extract_text_with_engine(file_bytes: bytes, filename: str = "", content_type: str = ""):
-        """Like extract_text but also returns which tier produced the text."""
+        """Same as extract_text, but also says which method found the text."""
         if not file_bytes:
             return "", "none"
 
@@ -73,18 +72,18 @@ class OCRService:
         if not (is_pdf or is_image):
             return "", "unsupported"
 
-        # Tier 1: embedded PDF text layer.
+        # Way 1: text that is already inside the PDF.
         if is_pdf:
             text = OCRService._pdf_embedded_text(file_bytes)
             if text:
                 return text, "pdf_text_layer"
 
-        # Tier 2: local Tesseract OCR.
+        # Way 2: read the text from the picture with Tesseract.
         ocr_text = OCRService._tesseract_pdf(file_bytes) if is_pdf else OCRService._tesseract_image(file_bytes)
         if len(ocr_text) >= Config.OCR_MIN_TEXT_LENGTH:
             return ocr_text, "tesseract"
 
-        # Tier 3: optional cloud OCR for files Tesseract could not read well.
+        # Way 3: optional cloud OCR, for files Tesseract couldn't read well.
         cloud_text = OCRService._unstract(file_bytes, filename)
         if cloud_text:
             return cloud_text, "llmwhisperer"
@@ -102,7 +101,7 @@ class OCRService:
         except Exception:
             return False
 
-    # ------------------------------------------------------------- Tier 1
+    # ------------------------------------------- Way 1: text inside the PDF
     @staticmethod
     def _pdf_embedded_text(file_bytes: bytes) -> str:
         try:
@@ -119,7 +118,7 @@ class OCRService:
             logger.warning("pdfplumber could not read PDF either (%s).", err)
             return ""
 
-    # ------------------------------------------------------------- Tier 2
+    # ------------------------------------------- Way 2: Tesseract OCR
     @staticmethod
     def _configure_tesseract():
         if Config.TESSERACT_CMD:
@@ -129,7 +128,7 @@ class OCRService:
 
     @staticmethod
     def _prepare_image(image):
-        """Light clean-up that measurably helps Tesseract on photos/scans."""
+        """Small clean-up that helps Tesseract: straighten, grey, enlarge, more contrast."""
         image = ImageOps.exif_transpose(image)
         if image.mode not in ("L", "RGB"):
             image = image.convert("RGB")
@@ -152,7 +151,7 @@ class OCRService:
         try:
             with Image.open(io.BytesIO(file_bytes)) as img:
                 pages = []
-                # Multi-frame images (e.g. multi-page TIFF) are OCR'd frame by frame.
+                # Some images (like multi-page TIFFs) have several pages; read each one.
                 for frame in range(min(getattr(img, "n_frames", 1), Config.OCR_MAX_PAGES)):
                     img.seek(frame)
                     pages.append(OCRService._ocr_image(img.copy()))
@@ -182,7 +181,7 @@ class OCRService:
             logger.warning("Tesseract PDF OCR failed: %s", err)
             return ""
 
-    # ------------------------------------------------------------- Tier 3
+    # ------------------------------------------- Way 3: LLMWhisperer (optional)
     @staticmethod
     def _unstract(file_bytes: bytes, filename: str) -> str:
         api_key = Config.UNSTRACT_API_KEY

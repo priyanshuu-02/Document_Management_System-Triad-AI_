@@ -1,3 +1,4 @@
+"""How a metadata field is stored (its name, type, dropdown options and whether it's required)."""
 from datetime import datetime, timezone
 
 class MetadataFieldModel:

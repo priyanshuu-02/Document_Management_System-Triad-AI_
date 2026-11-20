@@ -1,16 +1,15 @@
 /**
- * Shared access-request data (incoming inbox + requests the user sent).
+ * Shared list of access requests: the incoming ones (for my division) and
+ * the ones I sent.
  *
  * The sidebar badge, the notification bell, the dashboard counter and the
- * Access Requests page all need the same two lists.  Previously each one
- * polled the API on its own timer; now one poller fetches both lists and
- * every component reads the shared result.
+ * Access Requests page all need the same data. Instead of each one asking
+ * the server on its own timer, one timer fetches it and they all share it.
  *
- * - The poll interval is the shortest one requested by any mounted component
- *   (15 s normally, faster while the Access Requests page is open).
- * - Polling pauses while the browser tab is hidden and refreshes when the
- *   user comes back.
- * - Concurrent refreshes are de-duplicated into one pair of requests.
+ * - It refreshes every 15 seconds, or every 5 seconds while the Access
+ *   Requests page is open.
+ * - It stops while the browser tab is hidden, and refreshes when you come back.
+ * - If two parts ask at the same moment, only one request is sent.
  */
 import { useEffect, useSyncExternalStore } from 'react';
 import client from './client';

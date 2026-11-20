@@ -1,13 +1,15 @@
-# Triad AI DMS - full stack: MongoDB + Flask API (with Tesseract OCR) + React/nginx.
+# Runs the whole project: MongoDB + Flask API (with Tesseract OCR) + React app.
 #
 #   docker compose up --build
 #
-#   App:      http://localhost:3000
-#   API:      http://localhost:5000/api   (the assignment test script targets this)
+#   Web app: http://localhost:3000
+#   API:     http://localhost:5000/api   (the company's test script uses this)
 #
-# Works with no extra configuration.  Optional overrides go in a root-level
-# .env file (see .env.example), e.g. MONGO_URI to use MongoDB Atlas instead of
-# the bundled MongoDB container.
+# No setup needed. To change a setting (for example to use MongoDB Atlas
+# instead of the MongoDB container), put it in a .env file next to this one.
+# See .env.example.
+#
+# All ports are opened on this computer only (127.0.0.1), not to the network.
 
 name: triad-dms
 
@@ -16,11 +18,9 @@ services:
     image: mongo:7.0
     restart: unless-stopped
     volumes:
-      - mongo_data:/data/db
-    # Bound to localhost only, so tools like MongoDB Compass work locally but
-    # the database is never exposed to the network.
+      - mongo_data:/data/db        # data survives restarts
     ports:
-      - "127.0.0.1:27017:27017"
+      - "127.0.0.1:27017:27017"   # handy for MongoDB Compass
     healthcheck:
       test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
       interval: 5s
@@ -35,12 +35,12 @@ services:
       PORT: "5000"
       MONGO_URI: ${MONGO_URI:-mongodb://mongodb:27017}
       MONGO_DB_NAME: ${MONGO_DB_NAME:-triad_dms}
-      # Local-only default; any real deployment must supply its own secret.
-      SECRET_KEY: ${SECRET_KEY:-local-docker-dev-secret-change-me}
-      # The official assignment test (test_api.py) uploads without a token.
-      # Enabled for local evaluation only; it is off on the public deployment.
+      # Fine for a local run. A real server must use its own long random key.
+      SECRET_KEY: ${SECRET_KEY:-local-docker-dev-secret-change-me-0123456789}
+      # The company's test_api.py uploads without logging in, so this local
+      # setup allows that one anonymous upload. It is off on the live site.
       ALLOW_UNAUTHENTICATED_TEST_UPLOAD: ${ALLOW_UNAUTHENTICATED_TEST_UPLOAD:-true}
-      # Create the admin + demo accounts listed in the README on first start.
+      # Create the admin and demo accounts from the README on first start.
       SEED_ON_START: "true"
       SEED_DEMO_USERS: ${SEED_DEMO_USERS:-true}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@triad.ai}
@@ -48,10 +48,10 @@ services:
       ADMIN_DIVISION: ${ADMIN_DIVISION:-Division A}
       UNSTRACT_API_KEY: ${UNSTRACT_API_KEY:-}
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"
     depends_on:
       mongodb:
-        condition: service_healthy
+        condition: service_healthy   # wait until MongoDB is really ready
 
   frontend:
     build: ./frontend
@@ -60,7 +60,7 @@ services:
       PORT: "80"
       BACKEND_URL: http://backend:5000
     ports:
-      - "3000:80"
+      - "127.0.0.1:3000:80"
     depends_on:
       backend:
         condition: service_healthy

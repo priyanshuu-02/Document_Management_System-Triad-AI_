@@ -1,13 +1,19 @@
+// Upload form. Shows one input per metadata field the admin set up, and lets
+// the user add extra fields of their own. The file is OCR'd on the server.
 import React, { useState, useEffect } from 'react';
 import client from '../api/client';
 import { useAuth } from '../context/AuthContext';
+import { isDivisionField } from '../api/metadataFields';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Upload, FileUp, Plus, Trash2, CheckCircle, AlertCircle } from 'lucide-react';
 
 export default function UploadModal({ isOpen, onClose, onUploadSuccess }) {
   const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const [file, setFile] = useState(null);
   const [metadataFields, setMetadataFields] = useState([]);
+  // Normal users don't see the Division field: their division is fixed.
+  const visibleFields = isAdmin ? metadataFields : metadataFields.filter(f => !isDivisionField(f));
   const [dynamicValues, setDynamicValues] = useState({});
   const [customFields, setCustomFields] = useState([]);
   const [customKey, setCustomKey] = useState('');
@@ -31,10 +37,11 @@ export default function UploadModal({ isOpen, onClose, onUploadSuccess }) {
         const fields = res.data?.fields || [];
         setMetadataFields(fields);
 
-        // Prepopulate default values
+        // Start each dropdown on its first option, and Division on the user's own.
         const defaults = {};
         fields.forEach(f => {
           defaults[f.name] = f.options && f.options.length > 0 ? f.options[0] : '';
+          if (isDivisionField(f)) defaults[f.name] = user?.division || defaults[f.name];
         });
         setDynamicValues(defaults);
       } catch (err) {
@@ -82,16 +89,15 @@ export default function UploadModal({ isOpen, onClose, onUploadSuccess }) {
       const formData = new FormData();
       formData.append('file', file);
 
-      // Assemble all dynamic metadata
-      const finalMetadata = {
-        Division: user?.division || 'General',
-        ...dynamicValues
-      };
-
-      // Add custom ad-hoc fields
+      // Collect all metadata: the admin-defined fields plus any extra
+      // fields the user added by hand.
+      const finalMetadata = { ...dynamicValues };
       customFields.forEach(f => {
         finalMetadata[f.key] = f.val;
       });
+      // Users always upload into their own division (the server checks this
+      // too). Only admins can choose another one.
+      finalMetadata.Division = isAdmin ? (dynamicValues.Division || user?.division) : user?.division;
 
       formData.append('metadata', JSON.stringify(finalMetadata));
 
@@ -197,13 +203,13 @@ export default function UploadModal({ isOpen, onClose, onUploadSuccess }) {
               </div>
 
               {/* Dynamic Metadata Schema Inputs */}
-              {metadataFields.length > 0 && (
+              {visibleFields.length > 0 && (
                 <div className="space-y-3 pt-2">
                   <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
                     Metadata Attributes
                   </label>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {metadataFields.map((f) => (
+                    {visibleFields.map((f) => (
                       <div key={f.id} className="space-y-1">
                         <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">
                           {f.name} {f.required && <span className="text-rose-500">*</span>}

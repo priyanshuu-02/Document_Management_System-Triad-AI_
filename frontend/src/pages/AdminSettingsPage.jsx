@@ -1,8 +1,12 @@
+// Page 6: admin settings. Three tabs: users (roles and divisions), metadata
+// fields (add or edit fields like "Report Type" and their options), and the
+// audit log of access decisions.
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import client from '../api/client';
 import { useAuth } from '../context/AuthContext';
+import { useMetadataFields, reloadMetadataFields } from '../api/metadataFields';
 import { 
   Settings, 
   Plus, 
@@ -28,6 +32,7 @@ import {
 
 export default function AdminSettingsPage() {
   const { user: currentUser } = useAuth();
+  const { divisions: divisionOptions } = useMetadataFields();
   const [searchParams, setSearchParams] = useSearchParams();
   const urlTab = searchParams.get('tab');
   const [activeTab, setActiveTab] = useState(urlTab || 'users'); // 'users' | 'metadata' | 'audit'
@@ -87,6 +92,9 @@ export default function AdminSettingsPage() {
     try {
       const res = await client.get('/admin/metadata-fields');
       setFields(res.data?.fields || []);
+      // Also refresh the shared copy, so filters and forms on other pages
+      // pick up the admin's changes straight away.
+      reloadMetadataFields();
     } catch (err) {
       console.error('Failed to load fields:', err);
     } finally {
@@ -352,7 +360,7 @@ export default function AdminSettingsPage() {
       className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-16 sm:pt-3.5 pb-8 space-y-5"
     >
       
-      {/* Header & Sub-navbar Tabs */}
+      {/* Page title and tabs */}
       <div className="space-y-4 pb-5 border-b border-slate-200/80 dark:border-[#222d3e]">
         <div className="pr-0 sm:pr-72 md:pr-80">
           <h1 className="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white flex items-center">
@@ -364,7 +372,7 @@ export default function AdminSettingsPage() {
           </p>
         </div>
 
-        {/* Sub-navbar with Usable Action Tabs Under Heading */}
+        {/* Tab buttons */}
         <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-100/90 dark:bg-[#161d2a]/90 backdrop-blur-md rounded-xl border border-slate-200/80 dark:border-[#222d3e] w-fit shadow-xs">
           <motion.button
             whileTap={{ scale: 0.96 }}
@@ -434,7 +442,7 @@ export default function AdminSettingsPage() {
         </div>
       </div>
 
-      {/* Global Notification Banner */}
+      {/* Success / error message */}
       {message && (
         <motion.div 
           initial={{ opacity: 0, y: -6 }}
@@ -454,9 +462,7 @@ export default function AdminSettingsPage() {
         </motion.div>
       )}
 
-      {/* ========================================================================= */}
-      {/* TAB 1: USER MANAGEMENT & PROMOTION */}
-      {/* ========================================================================= */}
+      {/* Tab 1: users (make admin, move division) */}
       {activeTab === 'users' && (
         <div className="space-y-4">
           
@@ -600,7 +606,7 @@ export default function AdminSettingsPage() {
                             </div>
                           </td>
 
-                          {/* Division (Editable Transfer Dropdown) */}
+                          {/* Division (change it to move the user) */}
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="flex items-center space-x-1.5">
                               <Building2 className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 shrink-0" />
@@ -611,9 +617,10 @@ export default function AdminSettingsPage() {
                                 title="Change division to transfer user"
                                 className="bg-slate-50 dark:bg-[#0d1117] border border-slate-200 dark:border-[#222d3e] text-slate-800 dark:text-slate-200 rounded-lg px-2 py-1 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-[#0e6245] cursor-pointer disabled:opacity-50"
                               >
-                                <option value="Division A">Division A</option>
-                                <option value="Division B">Division B</option>
-                                <option value="Division C">Division C</option>
+                                {/* Divisions are the options of the Division field (Metadata tab) */}
+                                {[...new Set([...divisionOptions, u.division].filter(Boolean))].map(d => (
+                                  <option key={d} value={d}>{d}</option>
+                                ))}
                               </select>
                             </div>
                           </td>
@@ -681,9 +688,7 @@ export default function AdminSettingsPage() {
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* TAB 2: DYNAMIC METADATA CONFIGURATION */}
-      {/* ========================================================================= */}
+      {/* Tab 2: metadata fields (add, edit, delete) */}
       {activeTab === 'metadata' && (
         <div className="space-y-6">
           
@@ -885,9 +890,7 @@ export default function AdminSettingsPage() {
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* TAB 3: AUDIT TRAIL LOG WITH COMPREHENSIVE FILTERS */}
-      {/* ========================================================================= */}
+      {/* Tab 3: audit log, with filters */}
       {activeTab === 'audit' && (
         <div className="space-y-4">
           

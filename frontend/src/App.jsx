@@ -1,3 +1,4 @@
+// Sets up the pages (routes), the login checks and the main layout.
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';

@@ -1,3 +1,5 @@
+// Page 3: one document's details and metadata. Shows 'Download' if the user
+// may open it, or 'Request Access' if it belongs to another division.
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';

@@ -1,6 +1,8 @@
+// Page 5: search across document names, metadata and OCR text.
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import client from '../api/client';
+import { useMetadataFields } from '../api/metadataFields';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Search, 
@@ -31,25 +33,19 @@ export default function SearchPage() {
   const [query, setQuery] = useState(urlQuery);
   const [activeTab, setActiveTab] = useState('search'); // 'search' | 'filters'
   
-  // Filter Dropdown states
+  // Extra filters. The dropdowns come from the admin's metadata fields.
+  const { divisions, filterFields } = useMetadataFields();
   const [filterDivision, setFilterDivision] = useState('');
-  const [filterReportType, setFilterReportType] = useState('');
-  const [filterYear, setFilterYear] = useState('');
+  const [fieldFilters, setFieldFilters] = useState({}); // e.g. { "Report Type": "Audit" }
+  const activeFieldFilters = Object.entries(fieldFilters).filter(([, value]) => value);
 
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [actionMessage, setActionMessage] = useState(null);
 
-  const quickFilters = [
-    'Financial',
-    'Technical',
-    'Operations',
-    'Audit',
-    'Division A',
-    'Division B',
-    'Division C'
-  ];
+  // Quick search chips: a few options from the first field, plus the divisions.
+  const quickFilters = [...(filterFields[0]?.options || []).slice(0, 4), ...divisions];
 
   // Helper for file type badge
   const getFileBadge = (filename) => {
@@ -75,27 +71,24 @@ export default function SearchPage() {
   // Perform search
   const handleSearch = async (searchTerm = query) => {
     const term = (searchTerm || '').trim();
-    if (!term && !filterDivision && !filterReportType && !filterYear) return;
+    // With no search words, the first chosen filter value is used as the search.
+    const fallbackTerm = filterDivision || activeFieldFilters[0]?.[1] || '';
+    if (!term && !fallbackTerm) return;
 
     setLoading(true);
     setHasSearched(true);
 
     try {
-      const res = await client.get('/search', {
-        params: { q: term || filterDivision || filterReportType || filterYear }
-      });
+      const res = await client.get('/search', { params: { q: term || fallbackTerm } });
       let fetched = res.data?.results || [];
 
-      // If filter dropdowns were selected, apply additional refining
+      // Then keep only results that match every chosen dropdown.
       if (filterDivision) {
         fetched = fetched.filter(d => (d.division || '').toLowerCase() === filterDivision.toLowerCase());
       }
-      if (filterReportType) {
-        fetched = fetched.filter(d => (d.metadata?.['Report Type'] || '').toLowerCase() === filterReportType.toLowerCase());
-      }
-      if (filterYear) {
-        fetched = fetched.filter(d => (d.metadata?.['Fiscal Year'] || '').includes(filterYear));
-      }
+      activeFieldFilters.forEach(([name, value]) => {
+        fetched = fetched.filter(d => String(d.metadata?.[name] || '').toLowerCase() === value.toLowerCase());
+      });
 
       setResults(fetched);
     } catch (err) {
@@ -190,9 +183,7 @@ export default function SearchPage() {
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-16 sm:pt-3.5 pb-8 space-y-5">
       
-      {/* ========================================================================= */}
-      {/* 1. PAGE HEADER (Matching Mockup 3) */}
-      {/* ========================================================================= */}
+      {/* 1. Page header */}
       <div className="pr-0 sm:pr-72 md:pr-80">
         <div className="flex items-center space-x-2.5">
           <div className="w-1.5 h-6 bg-[#0e6245] dark:bg-emerald-400 rounded-full" />
@@ -226,9 +217,7 @@ export default function SearchPage() {
         </motion.div>
       )}
 
-      {/* ========================================================================= */}
-      {/* 2. SEARCH & FILTERS CARD (Matching Mockup 3) */}
-      {/* ========================================================================= */}
+      {/* 2. Search & filters card */}
       <div className="bg-white dark:bg-[#161d2a] rounded-2xl border border-slate-200/80 dark:border-[#222d3e] shadow-2xs overflow-hidden transition-colors">
         
         {/* Top Tab Bar: Search vs Filters */}
@@ -291,7 +280,7 @@ export default function SearchPage() {
             </motion.button>
           </div>
 
-          {/* Quick Filters Row (Matching Mockup 3) */}
+          {/* Quick Filters Row */}
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <span className="text-xs font-medium text-slate-400 dark:text-slate-400 mr-1 shrink-0">
               Quick filters:
@@ -332,48 +321,30 @@ export default function SearchPage() {
                   className="w-full px-3 py-1.5 text-xs bg-slate-50 dark:bg-[#121721] border border-slate-200 dark:border-[#222d3e] rounded-lg text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-600"
                 >
                   <option value="">All Divisions</option>
-                  <option value="Division A">Division A</option>
-                  <option value="Division B">Division B</option>
-                  <option value="Division C">Division C</option>
+                  {divisions.map(d => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
                 </select>
               </div>
 
-              {/* Report Type Dropdown */}
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                  Report Type
-                </label>
-                <select
-                  value={filterReportType}
-                  onChange={(e) => setFilterReportType(e.target.value)}
-                  className="w-full px-3 py-1.5 text-xs bg-slate-50 dark:bg-[#121721] border border-slate-200 dark:border-[#222d3e] rounded-lg text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-600"
-                >
-                  <option value="">All Report Types</option>
-                  <option value="Financial">Financial</option>
-                  <option value="Technical">Technical</option>
-                  <option value="Operations">Operations</option>
-                  <option value="Audit">Audit</option>
-                  <option value="Legal">Legal</option>
-                </select>
-              </div>
-
-              {/* Year Dropdown */}
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                  Fiscal Year
-                </label>
-                <select
-                  value={filterYear}
-                  onChange={(e) => setFilterYear(e.target.value)}
-                  className="w-full px-3 py-1.5 text-xs bg-slate-50 dark:bg-[#121721] border border-slate-200 dark:border-[#222d3e] rounded-lg text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-600"
-                >
-                  <option value="">All Years</option>
-                  <option value="2024">2024</option>
-                  <option value="2025">2025</option>
-                  <option value="2026">2026</option>
-                  <option value="2027">2027</option>
-                </select>
-              </div>
+              {/* One dropdown per metadata field the admin created */}
+              {filterFields.map(field => (
+                <div key={field.id}>
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                    {field.name}
+                  </label>
+                  <select
+                    value={fieldFilters[field.name] || ''}
+                    onChange={(e) => setFieldFilters(prev => ({ ...prev, [field.name]: e.target.value }))}
+                    className="w-full px-3 py-1.5 text-xs bg-slate-50 dark:bg-[#121721] border border-slate-200 dark:border-[#222d3e] rounded-lg text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-600"
+                  >
+                    <option value="">All</option>
+                    {field.options.map(opt => (
+                      <option key={opt} value={opt}>{opt}</option>
+                    ))}
+                  </select>
+                </div>
+              ))}
 
             </motion.div>
           )}
@@ -382,9 +353,7 @@ export default function SearchPage() {
 
       </div>
 
-      {/* ========================================================================= */}
-      {/* 3. SEARCH RESULTS LIST */}
-      {/* ========================================================================= */}
+      {/* 3. Search results list */}
       {loading ? (
         <div className="py-20 flex flex-col items-center justify-center space-y-3 bg-white dark:bg-[#161d2a] rounded-2xl border border-slate-200/80 dark:border-[#222d3e]">
           <div className="w-8 h-8 border-3 border-[#0e6245] dark:border-emerald-400 border-t-transparent rounded-full animate-spin"></div>

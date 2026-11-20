@@ -1,3 +1,5 @@
+// Keeps track of who is logged in. The token and user are saved in the browser,
+// and checked against the server (/api/auth/me) when the app opens.
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import client from '../api/client';
 

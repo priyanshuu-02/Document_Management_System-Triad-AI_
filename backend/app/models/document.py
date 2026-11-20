@@ -1,3 +1,6 @@
+"""How a document is stored, and what we send back to the browser.
+
+sanitize() hides the OCR text from people who aren't allowed to open the document."""
 from datetime import datetime, timezone
 from bson import ObjectId
 

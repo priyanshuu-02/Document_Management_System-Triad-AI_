@@ -1,3 +1,4 @@
+// Wraps admin-only pages. Anyone who isn't an admin is sent to the 'not allowed' page.
 import React from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';

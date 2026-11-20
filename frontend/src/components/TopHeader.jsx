@@ -1,3 +1,5 @@
+// Bar at the top right: theme switch, notifications bell and the user's name.
+// Notifications are built from the access requests (approved, rejected, new ones).
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
@@ -194,7 +196,7 @@ export default function TopHeader({ onOpenMobile }) {
     <header className="sticky top-0 z-30 pointer-events-none px-4 sm:px-6 lg:px-8 pt-3 pb-1 sm:pt-3.5 -mb-14 sm:-mb-16 transition-all">
       <div className="w-full flex items-center justify-between gap-4">
         
-        {/* Left: Mobile menu toggle (floating pill on mobile viewports) */}
+        {/* Left: menu button (only on phones) */}
         <div className="pointer-events-auto md:hidden">
           <motion.button
             whileTap={{ scale: 0.92 }}
@@ -206,10 +208,10 @@ export default function TopHeader({ onOpenMobile }) {
           </motion.button>
         </div>
 
-        {/* Desktop spacer to push floating nav to the right */}
+        {/* Empty space that pushes the buttons to the right */}
         <div className="hidden md:block" />
 
-        {/* Right: Floating Translucent Mirror Nav Bar */}
+        {/* Right: theme switch, notifications and profile */}
         <div 
           ref={popoverRef}
           className="pointer-events-auto relative flex items-center space-x-2 sm:space-x-2.5 px-3 py-1.5 backdrop-blur-2xl backdrop-saturate-150 bg-white/40 hover:bg-white/55 dark:bg-[#121721]/45 dark:hover:bg-[#161d2a]/60 border border-white/70 dark:border-white/12 shadow-[0_8px_32px_0_rgba(31,38,135,0.07)] dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.45)] rounded-2xl transition-all"
@@ -240,7 +242,7 @@ export default function TopHeader({ onOpenMobile }) {
             </motion.button>
           </div>
 
-          {/* Translucent Mirror Divider */}
+          {/* Divider */}
           <div className="w-px h-5 bg-slate-300/50 dark:bg-white/10 shrink-0" />
 
           {/* Theme Toggle Button */}
@@ -258,7 +260,7 @@ export default function TopHeader({ onOpenMobile }) {
             )}
           </motion.button>
 
-          {/* Translucent Mirror Divider */}
+          {/* Divider */}
           <div className="w-px h-5 bg-slate-300/50 dark:bg-white/10 shrink-0" />
 
           {/* User Profile Chip */}
@@ -276,9 +278,7 @@ export default function TopHeader({ onOpenMobile }) {
             </div>
           </div>
 
-          {/* ========================================================================= */}
-          {/* NOTIFICATION CENTER DROPDOWN POPOVER */}
-          {/* ========================================================================= */}
+          {/* Notifications dropdown */}
           <AnimatePresence>
             {isOpen && (
               <motion.div

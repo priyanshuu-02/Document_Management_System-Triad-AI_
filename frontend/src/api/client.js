@@ -1,21 +1,23 @@
+// The one place the app talks to the backend. Adds the login token to every
+// request, and quietly retries while a sleeping free server wakes up.
 import axios from 'axios';
 
-// Same-origin by default: nginx (Docker/Render) and the Vite dev server both
-// proxy /api to the Flask backend.  VITE_API_URL can override it at build time.
+// Calls go to /api on the same address as the page. nginx (Docker, Render)
+// and the Vite dev server pass them on to the Flask backend.
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 const client = axios.create({
   baseURL: API_BASE_URL,
-  // Generous: free-tier hosts can take ~40 s to wake, and OCR on big scans takes time.
+  // Long wait: a sleeping free server takes ~40 s to wake, and OCR on big scans is slow.
   timeout: 90000,
 });
 
-// --- Cold-start handling -----------------------------------------------------
-// On free hosting the API sleeps when idle; while it wakes, the platform answers
-// 502/503 without the request ever reaching Flask.  Those are safe to retry for
-// any method.  504 and network errors are retried only for GET, because the
-// request may already have been processed (e.g. an upload).
-const MAX_RETRIES = 10;          // ~50 s total, longer than a typical wake-up
+// --- Waking up a sleeping server ---------------------------------------------
+// On free hosting the backend sleeps when nobody uses it. While it wakes up,
+// the host answers 502 or 503 and our server never even sees the request, so
+// it's safe to send it again. For 504 and network errors we only retry GET
+// requests, because something like an upload may already have gone through.
+const MAX_RETRIES = 10;          // about 50 s in total
 const RETRY_DELAY_MS = 5000;
 
 const shouldRetry = (error) => {

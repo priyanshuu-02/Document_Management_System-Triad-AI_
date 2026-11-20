@@ -1,3 +1,4 @@
+"""How an access request is stored. Status is pending, approved, rejected or revoked."""
 from datetime import datetime, timezone
 from bson import ObjectId
 

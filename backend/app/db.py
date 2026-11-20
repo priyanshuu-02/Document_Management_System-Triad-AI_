@@ -1,9 +1,9 @@
-"""MongoDB + GridFS connection management.
+"""Connects to MongoDB and GridFS (MongoDB's storage for files).
 
-The application always talks to a real MongoDB.  The in-memory fallback
-(mongomock) exists only for unit tests and explicit offline demos and must be
-enabled with ALLOW_IN_MEMORY_DB=true; otherwise a missing database is a hard
-start-up error instead of silently losing data.
+The app always uses a real MongoDB. If it can't connect, it stops with a
+clear error instead of quietly running on a fake database and losing data.
+An in-memory database (mongomock) is used only by the unit tests, or when
+ALLOW_IN_MEMORY_DB=true is set on purpose.
 """
 import re
 import time
@@ -32,7 +32,7 @@ class InMemoryGridFSFile:
 
 
 class InMemoryGridFS:
-    """Minimal GridFS stand-in used together with mongomock in tests."""
+    """A tiny fake GridFS for the unit tests (keeps files in memory)."""
 
     def __init__(self):
         self._storage = {}
@@ -77,10 +77,10 @@ INDEXES = [
 
 
 def ensure_indexes(db):
-    """Create the indexes the queries rely on.  Idempotent and safe to repeat.
+    """Create the indexes that keep lookups fast. Safe to run every start-up.
 
-    A failure (e.g. legacy duplicate data blocking a unique index) is logged
-    rather than preventing the API from starting.
+    If one fails (for example old duplicate data blocks a unique index), we
+    log it and carry on, rather than stopping the app.
     """
     for collection, keys, options in INDEXES:
         try:

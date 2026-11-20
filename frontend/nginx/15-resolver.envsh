@@ -1,10 +1,14 @@
 #!/bin/sh
-# Sourced by the nginx image entrypoint before templates are rendered.
-# Exposes the container's DNS server to the nginx config as NGINX_RESOLVER.
+# Runs when the nginx container starts, before the config is filled in.
+# Sets NGINX_RESOLVER (the DNS server nginx uses to find the backend) to the
+# container's own DNS server, unless it was already set.
+# On Render we set it to public DNS (1.1.1.1 8.8.8.8) in render.yaml, because
+# Render's internal DNS sends *.onrender.com to a private network that free
+# services can't use.
 if [ -z "${NGINX_RESOLVER:-}" ]; then
     ns=$(awk '/^nameserver/ { print $2; exit }' /etc/resolv.conf)
     case "$ns" in
-        *:*) ns="[$ns]" ;;   # IPv6 addresses must be bracketed
+        *:*) ns="[$ns]" ;;   # IPv6 addresses need square brackets
     esac
     NGINX_RESOLVER="${ns:-127.0.0.11}"
 fi

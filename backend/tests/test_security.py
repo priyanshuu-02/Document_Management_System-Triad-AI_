@@ -10,6 +10,7 @@ import unittest
 os.environ.setdefault("SECRET_KEY", "unit-test-secret")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import jwt
 import mongomock
 from bson import ObjectId
 
@@ -200,16 +201,72 @@ class AccessSecurityTests(unittest.TestCase):
     def test_metadata_field_names_are_matched_literally(self):
         admin = self.headers(self.admin)
         self.assertEqual(self.client.post("/api/admin/metadata-fields", headers=admin, json={"name": "Region"}).status_code, 201)
-        # "R.*" must not be treated as a regex matching "Region"
-        self.assertEqual(self.client.post("/api/admin/metadata-fields", headers=admin, json={"name": "R.*"}).status_code, 201)
+        # "R(e)?gion" must not be treated as a regex that matches "Region"
+        self.assertEqual(self.client.post("/api/admin/metadata-fields", headers=admin, json={"name": "R(e)?gion"}).status_code, 201)
         self.assertEqual(self.client.post("/api/admin/metadata-fields", headers=admin, json={"name": "region"}).status_code, 409)
+        # Names that MongoDB would read as operators or nested paths are refused
+        for bad in ("$where", "a.b"):
+            self.assertEqual(self.client.post("/api/admin/metadata-fields", headers=admin, json={"name": bad}).status_code, 400)
 
     def test_seeding_never_recreates_deleted_fields(self):
-        self.assertEqual(seed_metadata_fields(self.db), len(DEFAULT_METADATA_FIELDS))
+        # Default fields plus the Division field
+        self.assertEqual(seed_metadata_fields(self.db), len(DEFAULT_METADATA_FIELDS) + 1)
         self.assertEqual(seed_metadata_fields(self.db), 0)
         self.db.metadata_fields.delete_one({"name": "Fiscal Year"})
         self.assertEqual(seed_metadata_fields(self.db), 0)
         self.assertIsNone(self.db.metadata_fields.find_one({"name": "Fiscal Year"}))
+
+    def test_division_field_is_protected_and_controls_signup(self):
+        admin = self.headers(self.admin)
+        fields = self.client.get("/api/admin/metadata-fields").get_json()["fields"]
+        division = next(f for f in fields if f["name"] == "Division")
+        # It can't be deleted or renamed, but its options can be edited
+        self.assertEqual(self.client.delete(f"/api/admin/metadata-fields/{division['id']}", headers=admin).status_code, 400)
+        self.assertEqual(self.client.put(f"/api/admin/metadata-fields/{division['id']}", headers=admin, json={"name": "Team"}).status_code, 400)
+        new_options = division["options"] + ["Division D"]
+        self.assertEqual(self.client.put(f"/api/admin/metadata-fields/{division['id']}", headers=admin, json={"options": new_options}).status_code, 200)
+        # Sign-up only accepts a configured division
+        ok = {"username": "dave", "email": "dave@test.local", "password": "Password123!", "division": "Division D"}
+        self.assertEqual(self.client.post("/api/auth/register", json=ok).status_code, 201)
+        bad = {"username": "eve", "email": "eve@test.local", "password": "Password123!", "division": "Made Up"}
+        self.assertEqual(self.client.post("/api/auth/register", json=bad).status_code, 400)
+
+    def test_untrusted_input_is_rejected_safely(self):
+        # NoSQL injection: an object instead of a string must not log anyone in
+        r = self.client.post("/api/auth/login", json={"identifier": {"$ne": ""}, "password": {"$ne": ""}})
+        self.assertIn(r.status_code, (400, 401))
+        # A JSON list instead of an object is handled, not a crash
+        self.assertEqual(self.client.post("/api/auth/login", json=["x"]).status_code, 400)
+        # Weak password and bad email are refused on sign-up
+        weak = {"username": "zed", "email": "zed@test.local", "password": "short", "division": "Division A"}
+        self.assertEqual(self.client.post("/api/auth/register", json=weak).status_code, 400)
+        bad_email = dict(weak, password="Password123!", email="not-an-email")
+        self.assertEqual(self.client.post("/api/auth/register", json=bad_email).status_code, 400)
+        # Metadata with an operator-like key is refused
+        r = self.client.post(
+            "/api/documents/upload", headers=self.headers(self.alice), content_type="multipart/form-data",
+            data={"file": (io.BytesIO(b"%PDF-1.4\n%%EOF"), "x.pdf"), "metadata": '{"$set": "x"}'},
+        )
+        self.assertEqual(r.status_code, 400)
+        # Bad ids give 404/400, never a server error
+        self.assertEqual(self.client.get("/api/documents/not-an-id", headers=self.headers(self.alice)).status_code, 404)
+        self.assertEqual(self.client.post("/api/access/request", headers=self.headers(self.bob), json={"doc_id": {"$gt": ""}}).status_code, 400)
+
+    def test_token_of_deleted_user_is_rejected(self):
+        headers = self.headers(self.bob)
+        self.assertEqual(self.client.get("/api/auth/me", headers=headers).status_code, 200)
+        self.db.users.delete_one({"_id": self.bob["_id"]})
+        self.assertEqual(self.client.get("/api/auth/me", headers=headers).status_code, 401)
+        # A token signed with another key is rejected too
+        forged = {"Authorization": "Bearer " + jwt.encode({"user_id": str(self.admin["_id"])}, "wrong-key", algorithm="HS256")}
+        self.assertEqual(self.client.get("/api/admin/users", headers=forged).status_code, 401)
+
+    def test_download_is_always_an_attachment(self):
+        doc_id = self.upload_as_alice()
+        r = self.client.get(f"/api/documents/{doc_id}/download", headers=self.headers(self.alice))
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.headers["Content-Disposition"].startswith("attachment"))
+        self.assertEqual(r.headers["X-Content-Type-Options"], "nosniff")
 
 
 if __name__ == "__main__":

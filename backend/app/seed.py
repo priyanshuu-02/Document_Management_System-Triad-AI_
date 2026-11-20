@@ -1,7 +1,8 @@
-"""Idempotent database seeding: starter metadata schema and initial accounts.
+"""First-run setup: default metadata fields and starting accounts.
 
-Used by ``seed_db.py`` (run by the container entrypoint before the web server
-starts) and by the metadata-fields endpoint for a first-time empty schema.
+Safe to run again and again. Existing fields and accounts are never changed
+or duplicated. Used by seed_db.py (run when the container starts) and by the
+metadata-fields endpoint the first time the field list is read.
 """
 import logging
 
@@ -13,8 +14,14 @@ from app.models.user import UserModel
 
 logger = logging.getLogger(__name__)
 
-# Starter schema only.  Admins can rename, extend or delete these from the
-# Admin / Settings page; nothing in the code depends on these names.
+# "Division" is a normal, editable dropdown field, but it is special: access
+# control depends on it, so it always exists and can't be renamed or deleted.
+# Admins add or remove divisions by editing its options on the Admin page.
+DIVISION_FIELD = "Division"
+DEFAULT_DIVISIONS = ["Division A", "Division B", "Division C"]
+
+# Starting fields only. Admins can rename, extend or delete them later on the
+# Admin / Settings page; no code depends on these names.
 DEFAULT_METADATA_FIELDS = [
     {"name": "Report Type", "field_type": "select",
      "options": ["Financial", "Audit", "Technical", "Operations", "Legal"], "required": False},
@@ -24,7 +31,7 @@ DEFAULT_METADATA_FIELDS = [
      "options": ["Public", "Internal Only", "Confidential", "Restricted"], "required": False},
 ]
 
-# Local / review demo accounts (enabled with SEED_DEMO_USERS=true).
+# Demo accounts for reviewers (only created when SEED_DEMO_USERS=true).
 DEMO_PASSWORD = "Password123!"
 DEMO_USERS = [
     {"username": "alice", "email": "alice@triad.ai", "division": "Division A"},
@@ -32,26 +39,54 @@ DEMO_USERS = [
 ]
 
 
-def seed_metadata_fields(db) -> int:
-    """Insert the starter fields only when no schema exists yet.
+def _find_division_field(db):
+    return db.metadata_fields.find_one({"name": {"$regex": f"^{DIVISION_FIELD}$", "$options": "i"}})
 
-    Seeding is skipped once any field exists so fields an admin deleted are
-    never re-created behind their back.
+
+def ensure_division_field(db) -> bool:
+    """Create the Division field if it is missing. Returns True if it was created."""
+    if _find_division_field(db):
+        return False
+    try:
+        db.metadata_fields.insert_one(MetadataFieldModel.create_field(
+            name=DIVISION_FIELD, field_type="select", options=DEFAULT_DIVISIONS, required=True))
+        return True
+    except DuplicateKeyError:
+        return False
+
+
+def get_divisions(db) -> list:
+    field = _find_division_field(db)
+    return list(field.get("options") or []) if field else list(DEFAULT_DIVISIONS)
+
+
+def division_allowed(db, division: str) -> bool:
+    """Is this one of the divisions the admin has configured?"""
+    return division in get_divisions(db)
+
+
+def seed_metadata_fields(db) -> int:
+    """Add the starting fields, but only on a brand-new database.
+
+    Once any field exists we leave the list alone, so a field an admin
+    deleted is never quietly brought back. The Division field is the one
+    exception: it is always made sure to exist.
     """
-    if db.metadata_fields.count_documents({}) > 0:
-        return 0
     inserted = 0
-    for field in DEFAULT_METADATA_FIELDS:
-        try:
-            db.metadata_fields.insert_one(MetadataFieldModel.create_field(**field))
-            inserted += 1
-        except DuplicateKeyError:
-            pass  # another worker seeded it concurrently
+    if db.metadata_fields.count_documents({}) == 0:
+        for field in DEFAULT_METADATA_FIELDS:
+            try:
+                db.metadata_fields.insert_one(MetadataFieldModel.create_field(**field))
+                inserted += 1
+            except DuplicateKeyError:
+                pass  # another worker added it at the same moment
+    if ensure_division_field(db):
+        inserted += 1
     return inserted
 
 
 def _ensure_user(db, username, email, password, division, role) -> bool:
-    """Create the account if neither its email nor username exists. Returns True if created."""
+    """Create the account unless the email or username is already taken."""
     if db.users.find_one({"$or": [{"email": email.lower()}, {"username": username}]}):
         return False
     try:

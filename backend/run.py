@@ -1,3 +1,5 @@
+"""Starts the backend for local development (python run.py).
+In Docker and on Render, gunicorn starts it instead (see the Dockerfile)."""
 import os
 from app import create_app
 

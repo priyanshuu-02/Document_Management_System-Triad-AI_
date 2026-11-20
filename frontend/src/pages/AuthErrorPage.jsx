@@ -1,3 +1,4 @@
+// Shown when someone opens a page they don't have permission for.
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';

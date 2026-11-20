@@ -1,8 +1,11 @@
+// Page 2: the document hub. Lists the documents the user can see, with filters
+// for division and every metadata field, and the Upload Document button.
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import client from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useAccessRequests } from '../api/accessRequestsStore';
+import { useMetadataFields } from '../api/metadataFields';
 import UploadModal from '../components/UploadModal';
 import { motion } from 'framer-motion';
 import { 
@@ -67,15 +70,17 @@ export default function DashboardPage() {
   // View Mode: 'table' | 'grid'
   const [viewMode, setViewMode] = useState('table');
 
-  // Filters
+  // Filters. The dropdowns are built from the fields the admin set up, so a
+  // new field (or a new option) shows up here without changing any code.
+  const { divisions, filterFields } = useMetadataFields();
   const [selectedDivision, setSelectedDivision] = useState(user?.role === 'admin' ? '' : (user?.division || ''));
-  const [selectedReportType, setSelectedReportType] = useState('');
-  const [selectedYear, setSelectedYear] = useState('');
+  const [fieldFilters, setFieldFilters] = useState({}); // e.g. { "Report Type": "Financial" }
   const [searchQuery, setSearchQuery] = useState('');
-  
-  // Dynamic fields for filter options
-  const [reportTypeOptions, setReportTypeOptions] = useState([]);
-  const [yearOptions, setYearOptions] = useState(['2024', '2025', '2026', '2027']);
+
+  // The first dropdown field (normally "Report Type") gets its own column.
+  const primaryField = filterFields[0]?.name || 'Report Type';
+  const setFieldFilter = (name, value) => setFieldFilters(prev => ({ ...prev, [name]: value }));
+  const hasFieldFilters = Object.values(fieldFilters).some(Boolean);
 
   // Selected document IDs (for table multi-select)
   const [selectedDocIds, setSelectedDocIds] = useState([]);
@@ -100,8 +105,10 @@ export default function DashboardPage() {
       if (user?.role === 'admin' && selectedDivision) {
         params.division = selectedDivision;
       }
-      if (selectedReportType) params['Report Type'] = selectedReportType;
-      if (selectedYear) params['Fiscal Year'] = selectedYear;
+      // Every chosen dropdown becomes a query parameter, e.g. ?Report Type=Financial
+      Object.entries(fieldFilters).forEach(([name, value]) => {
+        if (value) params[name] = value;
+      });
 
       const res = await client.get('/documents', { params });
       setDocuments(res.data?.documents || []);
@@ -112,33 +119,11 @@ export default function DashboardPage() {
     }
   };
 
-  useEffect(() => {
-    const fetchMetadataFilters = async () => {
-      try {
-        const res = await client.get('/admin/metadata-fields');
-        const fields = res.data?.fields || [];
-        const reportTypeField = fields.find(f => f.name.toLowerCase() === 'report type');
-        if (reportTypeField && reportTypeField.options) {
-          setReportTypeOptions(reportTypeField.options);
-        } else {
-          setReportTypeOptions(['Financial', 'Audit', 'Technical', 'Operations', 'Legal']);
-        }
-        const yearField = fields.find(f => f.name.toLowerCase() === 'fiscal year');
-        if (yearField && yearField.options) {
-          setYearOptions(yearField.options);
-        }
-      } catch (err) {
-        setReportTypeOptions(['Financial', 'Audit', 'Technical', 'Operations', 'Legal']);
-      }
-    };
-
-    fetchMetadataFilters();
-  }, []);
-
+  // Reload the list whenever a filter changes.
   useEffect(() => {
     fetchDocuments();
     setCurrentPage(1);
-  }, [selectedDivision, selectedReportType, selectedYear]);
+  }, [selectedDivision, fieldFilters]);
 
   // Handle file download
   const handleDownload = async (docId, filename) => {
@@ -305,9 +290,7 @@ export default function DashboardPage() {
   return (
     <div className="w-full max-w-7xl mx-auto px-3 sm:px-5 lg:px-6 pt-16 sm:pt-3.5 pb-8 space-y-5">
       
-      {/* ========================================================================= */}
-      {/* 1. TOP HEADER & MAIN ACTION BUTTON (Matching Mockup) */}
-      {/* ========================================================================= */}
+      {/* 1. Top header & main action button */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pr-0 sm:pr-72 md:pr-80">
         <div>
           <div className="flex items-center space-x-2.5">
@@ -356,9 +339,7 @@ export default function DashboardPage() {
         </motion.div>
       )}
 
-      {/* ========================================================================= */}
-      {/* 2. STAT CARDS ROW WITH SPRING MOTION (Matching Mockup 1) */}
-      {/* ========================================================================= */}
+      {/* 2. Summary cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         
         {/* Card 1: Total Documents */}
@@ -451,9 +432,7 @@ export default function DashboardPage() {
 
       </div>
 
-      {/* ========================================================================= */}
-      {/* 3. CATEGORY TABS (Matching Mockup 2: All / My Uploads / Shared / Favorites) */}
-      {/* ========================================================================= */}
+      {/* 3. Category tabs */}
       <div className="flex items-center space-x-1 sm:space-x-2 border-b border-slate-200/80 dark:border-[#1e2636] pb-2 overflow-x-auto text-xs">
         <button
           onClick={() => { setActiveCategory('all'); setCurrentPage(1); }}
@@ -504,9 +483,7 @@ export default function DashboardPage() {
         </button>
       </div>
 
-      {/* ========================================================================= */}
-      {/* 4. FILTER TOOLBAR (Matching Mockup 1) */}
-      {/* ========================================================================= */}
+      {/* 4. Filter toolbar */}
       <div className="bg-white dark:bg-[#161d2a] p-3 sm:p-4 rounded-2xl border border-slate-200/80 dark:border-[#222d3e] shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-3">
         
         {/* Dropdowns */}
@@ -522,9 +499,9 @@ export default function DashboardPage() {
                 className="px-2.5 py-1.5 bg-slate-50 dark:bg-[#121721] border border-slate-200 dark:border-[#222d3e] rounded-lg text-xs font-medium text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-600"
               >
                 <option value="">Division: All Divisions</option>
-                <option value="Division A">Division: Division A</option>
-                <option value="Division B">Division: Division B</option>
-                <option value="Division C">Division: Division C</option>
+                {divisions.map(d => (
+                  <option key={d} value={d}>Division: {d}</option>
+                ))}
               </select>
             ) : (
               <span className="px-2.5 py-1.5 bg-slate-50 dark:bg-[#121721] border border-slate-200 dark:border-[#222d3e] rounded-lg text-xs font-semibold text-slate-700 dark:text-slate-300">
@@ -533,43 +510,31 @@ export default function DashboardPage() {
             )}
           </div>
 
-          {/* Report Type Filter */}
-          <div className="flex items-center space-x-1.5 text-xs">
-            <Tag className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" />
-            <select
-              value={selectedReportType}
-              onChange={(e) => setSelectedReportType(e.target.value)}
-              className="px-2.5 py-1.5 bg-slate-50 dark:bg-[#121721] border border-slate-200 dark:border-[#222d3e] rounded-lg text-xs font-medium text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-600"
-            >
-              <option value="">Report Type: All Types</option>
-              {reportTypeOptions.map(opt => (
-                <option key={opt} value={opt}>{opt}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Year Filter */}
-          <div className="flex items-center space-x-1.5 text-xs">
-            <Calendar className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" />
-            <select
-              value={selectedYear}
-              onChange={(e) => setSelectedYear(e.target.value)}
-              className="px-2.5 py-1.5 bg-slate-50 dark:bg-[#121721] border border-slate-200 dark:border-[#222d3e] rounded-lg text-xs font-medium text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-600"
-            >
-              <option value="">Year: All Years</option>
-              {yearOptions.map(y => (
-                <option key={y} value={y}>{y}</option>
-              ))}
-            </select>
-          </div>
+          {/* One dropdown per metadata field the admin created (Report Type, Fiscal Year, ...) */}
+          {filterFields.map((field, i) => (
+            <div key={field.id} className="flex items-center space-x-1.5 text-xs">
+              {i === 0
+                ? <Tag className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" />
+                : <Calendar className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" />}
+              <select
+                value={fieldFilters[field.name] || ''}
+                onChange={(e) => setFieldFilter(field.name, e.target.value)}
+                className="px-2.5 py-1.5 bg-slate-50 dark:bg-[#121721] border border-slate-200 dark:border-[#222d3e] rounded-lg text-xs font-medium text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-600"
+              >
+                <option value="">{field.name}: All</option>
+                {field.options.map(opt => (
+                  <option key={opt} value={opt}>{opt}</option>
+                ))}
+              </select>
+            </div>
+          ))}
 
           {/* Reset Filters */}
-          {((user?.role === 'admin' && selectedDivision) || selectedReportType || selectedYear) && (
+          {((user?.role === 'admin' && selectedDivision) || hasFieldFilters) && (
             <button
               onClick={() => {
                 setSelectedDivision(user?.role === 'admin' ? '' : (user?.division || ''));
-                setSelectedReportType('');
-                setSelectedYear('');
+                setFieldFilters({});
               }}
               className="text-xs text-[#0e6245] dark:text-emerald-400 hover:underline px-2 py-1 font-medium"
             >
@@ -624,9 +589,7 @@ export default function DashboardPage() {
 
       </div>
 
-      {/* ========================================================================= */}
-      {/* 5. DOCUMENTS CONTAINER (Table or Grid View) */}
-      {/* ========================================================================= */}
+      {/* 5. Document list (table or grid view) */}
       <div className="bg-white dark:bg-[#161d2a] rounded-2xl border border-slate-200/80 dark:border-[#222d3e] shadow-2xs overflow-hidden transition-colors">
         
         {/* Section Header */}
@@ -685,7 +648,7 @@ export default function DashboardPage() {
                     />
                   </th>
                   <th className="px-3 py-2.5 font-semibold text-slate-700 dark:text-slate-300">Document Name</th>
-                  <th className="px-2.5 py-2.5 font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap">Report Type</th>
+                  <th className="px-2.5 py-2.5 font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap">{primaryField}</th>
                   <th className="px-2.5 py-2.5 font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap">Division</th>
                   <th className="px-2.5 py-2.5 font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap">Uploaded By</th>
                   <th className="px-2.5 py-2.5 font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap">Uploaded On</th>
@@ -698,7 +661,7 @@ export default function DashboardPage() {
                 {paginatedDocs.map((doc, idx) => {
                   const hasAccess = doc.can_download;
                   const fileBadge = getFileBadge(doc.filename);
-                  const reportType = doc.metadata?.['Report Type'] || 'General';
+                  const reportType = doc.metadata?.[primaryField] || '-';
                   const isSelected = selectedDocIds.includes(doc.id);
                   const isOcrIndexed = doc.ocr_text && doc.ocr_text.length > 0;
                   const isFav = favorites.includes(doc.id);
@@ -863,7 +826,7 @@ export default function DashboardPage() {
             {paginatedDocs.map((doc, idx) => {
               const hasAccess = doc.can_download;
               const fileBadge = getFileBadge(doc.filename);
-              const reportType = doc.metadata?.['Report Type'] || 'General';
+              const reportType = doc.metadata?.[primaryField] || '-';
 
               return (
                 <motion.div
@@ -955,9 +918,7 @@ export default function DashboardPage() {
 
         )}
 
-        {/* ========================================================================= */}
-        {/* 6. PAGINATION FOOTER (Matching Mockup 1) */}
-        {/* ========================================================================= */}
+        {/* 6. Pagination footer */}
         <div className="px-6 py-3.5 border-t border-slate-100 dark:border-[#1e2636] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-slate-500 dark:text-slate-400">
           <div>
             Showing <span className="font-semibold text-slate-800 dark:text-slate-200">

@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+// Page 1: login and sign-up. On sign-up the user also picks their division.
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import client from '../api/client';
+import { useMetadataFields } from '../api/metadataFields';
 import { 
   FileText, 
   Shield, 
@@ -22,7 +24,12 @@ export default function AuthPage() {
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [division, setDivision] = useState('Division A');
+  const { divisions } = useMetadataFields();
+  const [division, setDivision] = useState('');
+  // Pre-select the first division once the list has loaded.
+  useEffect(() => {
+    if (!division && divisions.length) setDivision(divisions[0]);
+  }, [divisions, division]);
   
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -72,7 +79,7 @@ export default function AuthPage() {
   return (
     <div className="min-h-screen bg-[#f8faf9] dark:bg-[#0d1117] flex flex-col justify-center py-12 sm:px-6 lg:px-8 relative transition-colors duration-200">
       
-      {/* Top Floating Theme Switcher */}
+      {/* Light/dark theme switch */}
       <div className="absolute top-6 right-6">
         <motion.button
           whileTap={{ rotate: 180, scale: 0.9 }}
@@ -89,7 +96,7 @@ export default function AuthPage() {
         </motion.button>
       </div>
 
-      {/* Brand Header */}
+      {/* App name and logo */}
       <motion.div 
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
@@ -198,6 +205,8 @@ export default function AuthPage() {
                 <input
                   type="password"
                   required
+                  minLength={isLogin ? undefined : 8}
+                  autoComplete={isLogin ? 'current-password' : 'new-password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
@@ -218,9 +227,10 @@ export default function AuthPage() {
                     onChange={(e) => setDivision(e.target.value)}
                     className="w-full px-3 py-2 text-sm bg-white dark:bg-[#0d1117] border border-slate-200 dark:border-[#222d3e] text-slate-900 dark:text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0e6245]"
                   >
-                    <option value="Division A">Division A</option>
-                    <option value="Division B">Division B</option>
-                    <option value="Division C">Division C</option>
+                    {/* Divisions come from the Admin page, not from the code */}
+                    {divisions.map((d) => (
+                      <option key={d} value={d}>{d}</option>
+                    ))}
                   </select>
                 </div>
               </div>

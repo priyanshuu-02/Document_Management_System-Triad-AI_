@@ -1,3 +1,9 @@
+"""Access request workflow.
+
+A user from another division asks for a document (pending). A member or
+admin of the document's division approves or rejects it. An admin can later
+revoke an approval. Every step is written to the audit log.
+"""
 import logging
 from datetime import datetime, timezone
 from bson import ObjectId
@@ -10,8 +16,8 @@ logger = logging.getLogger(__name__)
 class AccessService:
     @staticmethod
     def _write_audit_event(db, event_type, req, actor, note=None):
-        # The application never updates or deletes audit_events: every access
-        # decision produces a new immutable record.
+        # Audit records are only ever added, never edited or deleted, so the
+        # history of who did what can't be changed later.
         db.audit_events.insert_one(AuditLogModel.create_event(event_type, req, actor, note))
 
     @staticmethod
@@ -32,13 +38,12 @@ class AccessService:
         user_division = current_user.get("division", "")
         doc_division = doc.get("division", "")
 
-        # If user is in the same division, they already have full download & view permissions
+        # People in the same division can already open it, so no request is needed.
         if user_division == doc_division:
             return {"message": "You already belong to this division and have full access."}, 200
 
-        # Prevent duplicate requests.  Query each live status explicitly: an
-        # older rejected/revoked request must not hide a current approval or
-        # pending request (and must not block a fresh request either).
+        # Don't create a second request if one is already approved or waiting.
+        # An old rejected or revoked request doesn't count, so the user can ask again.
         base = {"doc_id": str(doc["_id"]), "requested_by_id": user_id}
         approved = db.access_requests.find_one({**base, "status": AccessRequestModel.STATUS_APPROVED})
         if approved:
@@ -47,7 +52,7 @@ class AccessService:
         if pending:
             return {"message": "Access request is already pending review.", "request": AccessRequestModel.sanitize(pending)}, 200
 
-        # Save the new pending request in MongoDB
+        # Save the new request as "pending"
         req_doc = AccessRequestModel.create_request(
             doc_id=str(doc["_id"]),
             doc_filename=doc.get("filename", "Untitled Document"),
@@ -60,7 +65,7 @@ class AccessService:
         res = db.access_requests.insert_one(req_doc)
         req_doc["_id"] = res.inserted_id
 
-        # Write an immutable audit log entry for this request
+        # Record it in the audit log
         AccessService._write_audit_event(db, "access_requested", req_doc, current_user)
 
         return {
@@ -191,9 +196,12 @@ class AccessService:
         user_role = current_user.get("role", "user")
         db = get_db()
 
+        # Admins see every request. Everyone else only sees requests for their
+        # own division's documents (a user without a division sees none).
         query = {}
-        if user_role != "admin" and user_division:
-            # Show requests for documents owned by this division
+        if user_role != "admin":
+            if not user_division:
+                return {"requests": [], "total": 0}, 200
             query["doc_division"] = user_division
 
         requests_list = list(db.access_requests.find(query).sort("created_at", -1))

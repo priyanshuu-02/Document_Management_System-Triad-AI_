@@ -1,18 +1,21 @@
+"""Document rules: who can see a document, uploading, listing and downloading."""
 import json
 import logging
 from bson import ObjectId
 from app.db import get_db, get_fs
 from app.models.document import DocumentModel
 from app.services.ocr_service import OCRService
+from app.validation import clean_metadata, clean_filename, is_safe_key, text
+from app.seed import division_allowed
 
 logger = logging.getLogger(__name__)
 
 class AccessContext:
-    """Everything needed to decide a user's access to many documents.
+    """Works out what one user may open, for a whole list of documents.
 
-    Built with a single query on ``access_requests`` per request, so listing
-    or searching N documents costs one database round trip instead of up to
-    2 x N (which made search take ~10 s against a remote Atlas cluster).
+    It loads all of the user's approved and pending requests with one
+    database query, then checks each document in memory. Before, every
+    document needed its own queries, which made search take about 10 seconds.
     """
 
     def __init__(self, db, current_user):
@@ -30,10 +33,10 @@ class AccessContext:
         or_user = [{"requested_by_id": user_id}]
         if ObjectId.is_valid(user_id):
             or_user.append({"requested_by_id": ObjectId(user_id)})
-        # A user can hold several requests for one document over time (e.g.
-        # rejected, then re-requested and approved).  Collecting approved and
-        # pending ids separately means an older rejected/revoked request never
-        # masks a newer approval.
+        # A user may have several requests for the same document over time
+        # (say, rejected first and approved later). We keep approved and
+        # pending ones in separate lists, so an old rejection never hides
+        # a newer approval.
         for req in db.access_requests.find(
             {"$or": or_user, "status": {"$in": ["approved", "pending"]}},
             {"doc_id": 1, "status": 1},
@@ -72,12 +75,12 @@ def approved_doc_ids(db, current_user) -> list:
 
 
 def build_metadata_text(metadata: dict) -> str:
-    """Flatten dynamic metadata into one searchable string ("Key: value | ...")."""
+    """Turn the metadata into one line of text for search, e.g. "Report Type: Audit | Fiscal Year: 2025"."""
     return " | ".join(f"{key}: {value}" for key, value in (metadata or {}).items())
 
 
 def backfill_metadata_text(db) -> int:
-    """Add ``metadata_text`` to documents uploaded before it existed."""
+    """Fill in metadata_text for older documents that were saved without it."""
     updated = 0
     for doc in db.documents.find({"metadata_text": {"$exists": False}}, {"metadata": 1}):
         db.documents.update_one({"_id": doc["_id"]},
@@ -90,53 +93,59 @@ class DocumentService:
     def upload_document(file, metadata_input, current_user=None):
         if not file or not file.filename:
             return {"error": "A valid file is required"}, 400
-
-        # Parse dynamic metadata JSON or dict
-        metadata = {}
-        if isinstance(metadata_input, dict):
-            metadata = metadata_input
-        elif isinstance(metadata_input, str) and metadata_input.strip():
-            try:
-                metadata = json.loads(metadata_input)
-            except Exception:
-                return {"error": "Invalid metadata JSON string"}, 400
-
-        # Determine target division and enforce RBAC rules.
-        # Regular users are restricted to their own division; admins can specify a target division.
-        requested_division = metadata.get("Division") or (current_user.get("division") if current_user else "General")
-
-        if current_user:
-            user_division = current_user.get("division")
-            user_role = current_user.get("role", "user")
-
-            # RBAC Rule: A user from Division A can only upload documents to Division A.
-            # Only administrators can upload to other divisions.
-            if user_role != "admin" and requested_division and requested_division.strip() != user_division:
-                return {
-                    "error": f"Permission denied: As a member of '{user_division}', you can only upload documents to '{user_division}'."
-                }, 403
-            final_division = user_division if user_role != "admin" else (requested_division or user_division)
-            uploaded_by = str(current_user.get("_id", current_user.get("user_id", "")))
-        else:
+        if not current_user:
             return {"error": "Authentication required"}, 401
 
-        # Save the finalized division into the metadata dictionary
+        # The metadata can arrive as a JSON string or an already-parsed dict.
+        if isinstance(metadata_input, str) and metadata_input.strip():
+            try:
+                metadata_input = json.loads(metadata_input)
+            except ValueError:
+                return {"error": "Invalid metadata JSON string"}, 400
+        metadata, error = clean_metadata(metadata_input or {})
+        if error:
+            return {"error": error}, 400
+
+        # Division rule: a normal user can only upload into their own division.
+        # Only an admin may pick another division.
+        user_division = current_user.get("division") or ""
+        is_admin = current_user.get("role", "user") == "admin"
+        requested_division = metadata.get("Division") or user_division
+
+        if not is_admin and requested_division != user_division:
+            return {
+                "error": f"Permission denied: As a member of '{user_division}', you can only upload documents to '{user_division}'."
+            }, 403
+        final_division = requested_division if is_admin else user_division
+        if not final_division:
+            return {"error": "A Division is required"}, 400
+        if is_admin and not division_allowed(get_db(), final_division):
+            return {"error": f"'{final_division}' is not one of the configured divisions"}, 400
+        uploaded_by = str(current_user.get("_id", current_user.get("user_id", "")))
+
+        # The division always lives in the metadata too, so it can be filtered on.
         metadata["Division"] = final_division
 
-        # Read binary file content into memory
+        # Fields the admin marked as "required" must have a value.
+        for field in get_db().metadata_fields.find({"required": True}, {"name": 1}):
+            if not metadata.get(field["name"]):
+                return {"error": f"'{field['name']}' is required"}, 400
+
         file_bytes = file.read()
         file_size = len(file_bytes)
-        filename = file.filename
-        content_type = file.content_type or "application/octet-stream"
+        if file_size == 0:
+            return {"error": "The uploaded file is empty"}, 400
+        filename = clean_filename(file.filename)
+        content_type = text(file.content_type, 100) or "application/octet-stream"
 
-        # Step 1: Run OCR to pull plain text from the file for search indexing
+        # Step 1: pull the text out of the file (PDF text or OCR) so it can be searched.
         extracted_text = OCRService.extract_text(file_bytes, filename=filename, content_type=content_type)
 
-        # Step 2: Store the actual file binary in MongoDB GridFS to avoid document size limits
+        # Step 2: store the file itself in GridFS (MongoDB's file storage).
         fs = get_fs()
         gridfs_id = fs.put(file_bytes, filename=filename, content_type=content_type)
 
-        # Step 3: Save the document metadata and OCR text into the documents collection
+        # Step 3: save the document's details (metadata, OCR text, file id).
         doc_record = DocumentModel.create_doc(
             filename=filename,
             content_type=content_type,
@@ -148,8 +157,8 @@ class DocumentService:
             uploaded_by=uploaded_by
         )
 
-        # Denormalised copy of the dynamic metadata so search can run inside
-        # MongoDB instead of scanning every document in Python.
+        # Also keep all metadata as one line of text, so search can look
+        # through every field with a single database query.
         doc_record["metadata_text"] = build_metadata_text(metadata)
 
         db = get_db()
@@ -169,19 +178,16 @@ class DocumentService:
 
         user_division = current_user.get("division") if current_user else None
         user_role = current_user.get("role", "user") if current_user else "user"
-        # One query loads all of this user's approved/pending requests
         access = AccessContext(db, current_user)
-        # Other-division documents this user was explicitly approved for
         approved_object_ids = access.approved_object_ids()
 
         if user_role == "admin":
-            # Admin can see all divisions or filter by division
+            # Admins see every division, and can narrow it down to one.
             if division_filter:
-                query["division"] = division_filter
+                query["division"] = str(division_filter)
         else:
-            # STRICT DIVISION ISOLATION (Point 1):
-            # Regular users can ONLY see their own division's documents,
-            # or documents from other divisions they have been explicitly APPROVED for!
+            # Normal users see their own division, plus any other-division
+            # documents they were approved for.
             if approved_object_ids:
                 query["$or"] = [
                     {"division": user_division},
@@ -190,11 +196,11 @@ class DocumentService:
             else:
                 query["division"] = user_division
 
-        # Support dynamic metadata filters (e.g. ?Report Type=Financial)
-        if metadata_filters:
-            for key, val in metadata_filters.items():
-                if val:
-                    query[f"metadata.{key}"] = val
+        # Any metadata field can be used as a filter, e.g. ?Report Type=Financial.
+        # Unsafe field names (starting with "$" or containing ".") are ignored.
+        for key, val in (metadata_filters or {}).items():
+            if val and is_safe_key(key):
+                query[f"metadata.{key.strip()}"] = str(val)
 
         docs = list(db.documents.find(query).sort("created_at", -1))
         
@@ -255,7 +261,7 @@ class DocumentService:
                 "error": f"Access denied: Document belongs to '{doc.get('division')}'. Please submit an access request."
             }, 403
 
-        # Stream file from GridFS
+        # Read the file back from GridFS
         fs = get_fs()
         try:
             grid_id = doc.get("gridfs_id")
@@ -269,5 +275,6 @@ class DocumentService:
                 "content_type": doc.get("content_type", "application/octet-stream")
             }, 200
         except Exception as e:
+            # Log the real reason, but don't show internal details to the user.
             logger.error(f"GridFS retrieval failed for {doc_id}: {e}")
-            return {"error": f"Failed to retrieve file from storage: {str(e)}"}, 500
+            return {"error": "Failed to retrieve the file from storage"}, 500
