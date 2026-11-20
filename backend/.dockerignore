@@ -1,0 +1,16 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+tests/
+test_*.py
+debug_test.py
+verify_fixes.py
+test_report.txt
+integration_report.txt
+test_sample.pdf
+Dockerfile
+.dockerignore

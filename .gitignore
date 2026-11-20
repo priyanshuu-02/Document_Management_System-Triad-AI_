@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+
+# Secrets / local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.log
+
+# Generated test artefacts
+test_report.txt
+integration_report.txt
+backend/test_sample.pdf
+
+# Node / React
+node_modules/
+frontend/dist/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Docker
+mongo_data/
+
+# Local agent artefacts
+.kiro/
+.agents/

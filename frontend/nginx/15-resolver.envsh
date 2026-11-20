@@ -1,0 +1,11 @@
+#!/bin/sh
+# Sourced by the nginx image entrypoint before templates are rendered.
+# Exposes the container's DNS server to the nginx config as NGINX_RESOLVER.
+if [ -z "${NGINX_RESOLVER:-}" ]; then
+    ns=$(awk '/^nameserver/ { print $2; exit }' /etc/resolv.conf)
+    case "$ns" in
+        *:*) ns="[$ns]" ;;   # IPv6 addresses must be bracketed
+    esac
+    NGINX_RESOLVER="${ns:-127.0.0.11}"
+fi
+export NGINX_RESOLVER

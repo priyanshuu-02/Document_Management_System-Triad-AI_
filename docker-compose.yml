@@ -1,0 +1,69 @@
+# Triad AI DMS - full stack: MongoDB + Flask API (with Tesseract OCR) + React/nginx.
+#
+#   docker compose up --build
+#
+#   App:      http://localhost:3000
+#   API:      http://localhost:5000/api   (the assignment test script targets this)
+#
+# Works with no extra configuration.  Optional overrides go in a root-level
+# .env file (see .env.example), e.g. MONGO_URI to use MongoDB Atlas instead of
+# the bundled MongoDB container.
+
+name: triad-dms
+
+services:
+  mongodb:
+    image: mongo:7.0
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    # Bound to localhost only, so tools like MongoDB Compass work locally but
+    # the database is never exposed to the network.
+    ports:
+      - "127.0.0.1:27017:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      PORT: "5000"
+      MONGO_URI: ${MONGO_URI:-mongodb://mongodb:27017}
+      MONGO_DB_NAME: ${MONGO_DB_NAME:-triad_dms}
+      # Local-only default; any real deployment must supply its own secret.
+      SECRET_KEY: ${SECRET_KEY:-local-docker-dev-secret-change-me}
+      # The official assignment test (test_api.py) uploads without a token.
+      # Enabled for local evaluation only; it is off on the public deployment.
+      ALLOW_UNAUTHENTICATED_TEST_UPLOAD: ${ALLOW_UNAUTHENTICATED_TEST_UPLOAD:-true}
+      # Create the admin + demo accounts listed in the README on first start.
+      SEED_ON_START: "true"
+      SEED_DEMO_USERS: ${SEED_DEMO_USERS:-true}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@triad.ai}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-Password123!}
+      ADMIN_DIVISION: ${ADMIN_DIVISION:-Division A}
+      UNSTRACT_API_KEY: ${UNSTRACT_API_KEY:-}
+    ports:
+      - "5000:5000"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    environment:
+      PORT: "80"
+      BACKEND_URL: http://backend:5000
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  mongo_data:
