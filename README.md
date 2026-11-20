@@ -5,7 +5,7 @@ Take-home assignment for the Triad AI Full Stack Developer Internship.
 A document management system with dynamic metadata, division-based access control, cross-division access requests and OCR search.
 
 - **Repository:** https://github.com/priyanshuu-02/Document_Management_System-Triad-AI_
-- **Live demo:** shared with the submission (Render free tier: the first request after idle can take about a minute)
+- **Live demo:** https://triad-dms-frontend.onrender.com
 - **Stack:** Python 3.11 + Flask REST API, MongoDB + GridFS, Tesseract OCR, React 18 + Vite + Tailwind, Docker Compose
 
 ---
