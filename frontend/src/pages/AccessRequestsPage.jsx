@@ -21,6 +21,7 @@ import {
 
 // Faster updates while reviewing requests; the rest of the app polls every 15 s.
 const REQUESTS_PAGE_POLL_MS = 5000;
+const MIN_REFRESH_SPIN_MS = 600;
 
 export default function AccessRequestsPage() {
   const { user } = useAuth();
@@ -45,10 +46,13 @@ export default function AccessRequestsPage() {
   const loading = !loaded;
 
   const fetchRequests = async () => {
+    const startedAt = Date.now();
     try {
       await refresh();
     } finally {
-      setRefreshing(false);
+      // Keep the spinner visible briefly so a fast refresh still gives feedback.
+      const remaining = Math.max(0, MIN_REFRESH_SPIN_MS - (Date.now() - startedAt));
+      setTimeout(() => setRefreshing(false), remaining);
     }
   };
 
