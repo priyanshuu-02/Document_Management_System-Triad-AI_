@@ -4,7 +4,7 @@ Assignment for the Triad AI Full Stack Developer Internship.
 
 You can upload documents, tag them with metadata fields that an admin sets up, and keep each division's documents private to that division. Someone from another division can ask for access, and the owning division approves or rejects. Every upload is run through OCR so the text inside it can be searched.
 
-- **Live demo:** https://triad-dms-frontend.onrender.com (free hosting: after a quiet spell the first load takes up to a minute)
+- **Live demo:** https://triad-dms-frontend.onrender.com (free hosting: after a quiet spell the first load takes up to a minute). Log in with the demo accounts below, or use the 1-click buttons on the login page.
 - **Built with:** Python 3.11 + Flask (REST API), MongoDB + GridFS, Tesseract OCR, React 18 + Vite + Tailwind, Docker Compose
 
 ---
@@ -26,13 +26,15 @@ The first build takes a few minutes. Then open:
 | Web app | http://localhost:3000 |
 | REST API | http://localhost:5000/api (health check: `/api/health`) |
 
-Nothing else to set up. Docker starts its own MongoDB on your computer, and on the first start it creates the default metadata fields and these accounts:
+Nothing else to set up. Docker starts its own MongoDB on your computer, and on the first start it creates the default metadata fields and these accounts. The same accounts work on the live demo:
 
 | Email | Password | Role | Division |
 | :--- | :--- | :--- | :--- |
 | `admin@triad.ai` | `Password123!` | Admin | Division A |
 | `alice@triad.ai` | `Password123!` | User | Division A |
 | `bob@triad.ai` | `Password123!` | User | Division B |
+
+These are public test accounts, so the live demo's data is demo data only and may be reset.
 
 **Quick tour:** log in as Alice and upload a PDF or an image. Log in as Bob: he can't see it in his list, but he can find it on the Search page and click Request Access. Log in as Alice again, approve it on the Access Requests page, and Bob can now download it.
 
