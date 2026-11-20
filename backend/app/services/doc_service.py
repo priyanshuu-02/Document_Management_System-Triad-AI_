@@ -7,68 +7,68 @@ from app.services.ocr_service import OCRService
 
 logger = logging.getLogger(__name__)
 
+class AccessContext:
+    """Everything needed to decide a user's access to many documents.
+
+    Built with a single query on ``access_requests`` per request, so listing
+    or searching N documents costs one database round trip instead of up to
+    2 x N (which made search take ~10 s against a remote Atlas cluster).
+    """
+
+    def __init__(self, db, current_user):
+        self.user = current_user
+        self.is_admin = bool(current_user) and current_user.get("role", "user") == "admin"
+        self.division = current_user.get("division") if current_user else None
+        self.approved = set()   # doc ids (str) with an approved request
+        self.pending = set()    # doc ids (str) with a pending request
+
+        if not current_user or self.is_admin:
+            return
+        user_id = str(current_user.get("_id", current_user.get("user_id", "")))
+        if not user_id:
+            return
+        or_user = [{"requested_by_id": user_id}]
+        if ObjectId.is_valid(user_id):
+            or_user.append({"requested_by_id": ObjectId(user_id)})
+        # A user can hold several requests for one document over time (e.g.
+        # rejected, then re-requested and approved).  Collecting approved and
+        # pending ids separately means an older rejected/revoked request never
+        # masks a newer approval.
+        for req in db.access_requests.find(
+            {"$or": or_user, "status": {"$in": ["approved", "pending"]}},
+            {"doc_id": 1, "status": 1},
+        ):
+            target = self.approved if req.get("status") == "approved" else self.pending
+            target.add(str(req.get("doc_id")))
+
+    def check(self, doc):
+        """Return (can_download, has_pending_request) for one document.
+
+        1. Admin -> allowed
+        2. Same division -> allowed
+        3. Approved access request -> allowed
+        """
+        if not self.user:
+            return False, False
+        if self.is_admin or self.division == doc.get("division"):
+            return True, False
+        doc_id = str(doc.get("_id"))
+        if doc_id in self.approved:
+            return True, False
+        return False, doc_id in self.pending
+
+    def approved_object_ids(self) -> list:
+        return [ObjectId(i) for i in self.approved if ObjectId.is_valid(i)]
+
+
 def check_access(db, doc, current_user):
-    """
-    Helper to determine if current_user has download rights to doc:
-    1. Admin user -> Allowed
-    2. User belongs to same division -> Allowed
-    3. User has an approved access request -> Allowed
-    """
-    if not current_user:
-        return False, False
-
-    user_role = current_user.get("role", "user")
-    user_division = current_user.get("division")
-    doc_division = doc.get("division")
-
-    if user_role == "admin" or user_division == doc_division:
-        return True, False
-
-    user_id = str(current_user.get("_id", current_user.get("user_id", "")))
-    if not user_id:
-        return False, False
-
-    doc_id_str = str(doc.get("_id"))
-    or_doc = [{"doc_id": doc_id_str}]
-    if ObjectId.is_valid(doc_id_str):
-        or_doc.append({"doc_id": ObjectId(doc_id_str)})
-
-    or_user = [{"requested_by_id": user_id}]
-    if ObjectId.is_valid(user_id):
-        or_user.append({"requested_by_id": ObjectId(user_id)})
-
-    # A user can accumulate several requests for one document over time
-    # (e.g. rejected, then re-requested and approved).  Look for each status
-    # explicitly so an older rejected/revoked request never masks a newer
-    # approval.
-    def has_request(status):
-        return db.access_requests.find_one({
-            "$and": [{"$or": or_doc}, {"$or": or_user}, {"status": status}]
-        }) is not None
-
-    if has_request("approved"):
-        return True, False
-    if has_request("pending"):
-        return False, True
-    return False, False
+    """(can_download, has_pending_request) for a single document."""
+    return AccessContext(db, current_user).check(doc)
 
 
 def approved_doc_ids(db, current_user) -> list:
     """ObjectIds of other-division documents this user has approved access to."""
-    if not current_user:
-        return []
-    user_id = str(current_user.get("_id", current_user.get("user_id", "")))
-    if not user_id:
-        return []
-    or_user = [{"requested_by_id": user_id}]
-    if ObjectId.is_valid(user_id):
-        or_user.append({"requested_by_id": ObjectId(user_id)})
-    ids = []
-    for req in db.access_requests.find({"$or": or_user, "status": "approved"}, {"doc_id": 1}):
-        doc_id = str(req.get("doc_id"))
-        if ObjectId.is_valid(doc_id):
-            ids.append(ObjectId(doc_id))
-    return ids
+    return AccessContext(db, current_user).approved_object_ids()
 
 
 def build_metadata_text(metadata: dict) -> str:
@@ -169,8 +169,10 @@ class DocumentService:
 
         user_division = current_user.get("division") if current_user else None
         user_role = current_user.get("role", "user") if current_user else "user"
+        # One query loads all of this user's approved/pending requests
+        access = AccessContext(db, current_user)
         # Other-division documents this user was explicitly approved for
-        approved_object_ids = approved_doc_ids(db, current_user)
+        approved_object_ids = access.approved_object_ids()
 
         if user_role == "admin":
             # Admin can see all divisions or filter by division
@@ -198,7 +200,7 @@ class DocumentService:
         
         sanitized_list = []
         for d in docs:
-            can_download, has_pending = check_access(db, d, current_user)
+            can_download, has_pending = access.check(d)
             sanitized_list.append(
                 DocumentModel.sanitize(
                     d, 

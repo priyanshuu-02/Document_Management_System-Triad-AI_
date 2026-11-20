@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import client from '../api/client';
 import { useAuth } from '../context/AuthContext';
+import { useAccessRequests } from '../api/accessRequestsStore';
 import UploadModal from '../components/UploadModal';
 import { motion } from 'framer-motion';
 import { 
@@ -84,7 +85,9 @@ export default function DashboardPage() {
   const pageSize = 8;
 
   // Pending access requests count
-  const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
+  // Read from the shared store (polled once for the whole app, no extra timer here)
+  const { inbox } = useAccessRequests(user?.id, null);
+  const pendingRequestsCount = inbox.filter(r => r.status === 'pending').length;
 
   // Feedback notification banner
   const [actionMessage, setActionMessage] = useState(null);
@@ -129,16 +132,7 @@ export default function DashboardPage() {
       }
     };
 
-    const fetchPendingCount = async () => {
-      try {
-        const res = await client.get('/access/inbox');
-        const pending = (res.data?.requests || []).filter(r => r.status === 'pending');
-        setPendingRequestsCount(pending.length);
-      } catch (_) {}
-    };
-
     fetchMetadataFilters();
-    fetchPendingCount();
   }, []);
 
   useEffect(() => {

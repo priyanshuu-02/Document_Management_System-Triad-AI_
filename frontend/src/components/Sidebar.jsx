@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import client from '../api/client';
+import { useAccessRequests } from '../api/accessRequestsStore';
 import { motion } from 'framer-motion';
 import { 
   Search, 
@@ -19,21 +19,9 @@ export default function Sidebar({ mobileOpen, onCloseMobile }) {
   const { user, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
-  const [pendingCount, setPendingCount] = useState(0);
-
-  useEffect(() => {
-    if (!user) return;
-    const fetchPending = async () => {
-      try {
-        const res = await client.get('/access/inbox');
-        const pending = (res.data?.requests || []).filter(r => r.status === 'pending');
-        setPendingCount(pending.length);
-      } catch (err) {}
-    };
-    fetchPending();
-    const interval = setInterval(fetchPending, 10000);
-    return () => clearInterval(interval);
-  }, [user]);
+  // Shared with the header, dashboard and requests page (one poller for all)
+  const { inbox } = useAccessRequests(user?.id);
+  const pendingCount = inbox.filter(r => r.status === 'pending').length;
 
   const handleLogout = () => {
     logout();

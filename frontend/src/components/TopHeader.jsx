@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
-import client from '../api/client';
+import { useAccessRequests } from '../api/accessRequestsStore';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Bell, 
@@ -26,9 +26,7 @@ export default function TopHeader({ onOpenMobile }) {
 
   // Notification state
   const [isOpen, setIsOpen] = useState(false);
-  const [notifications, setNotifications] = useState([]);
   const [filterTab, setFilterTab] = useState('all'); // 'all' | 'decisions' | 'requests'
-  const [loadingNotifs, setLoadingNotifs] = useState(false);
   const [readIds, setReadIds] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('dms_read_notifications') || '[]');
@@ -52,19 +50,16 @@ export default function TopHeader({ onOpenMobile }) {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isOpen]);
 
-  // Fetch access requests and synthesize notifications
-  const fetchNotifications = async () => {
-    if (!user) return;
-    setLoadingNotifs(true);
-    try {
-      const [sentRes, inboxRes] = await Promise.all([
-        client.get('/access/my-requests'),
-        client.get('/access/inbox')
-      ]);
+  // Access requests come from the shared store (one poller for the whole app)
+  const {
+    inbox,
+    sent,
+    loading: loadingNotifs,
+    refresh: fetchNotifications,
+  } = useAccessRequests(user?.id);
 
-      const sent = sentRes.data?.requests || [];
-      const inbox = inboxRes.data?.requests || [];
-
+  // Synthesize notifications from the shared request lists
+  const notifications = useMemo(() => {
       const notifs = [];
 
       // 1. Process Sent Requests (Approvals, Rejections, Revocations)
@@ -144,19 +139,8 @@ export default function TopHeader({ onOpenMobile }) {
 
       // Sort newest first
       notifs.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
-      setNotifications(notifs);
-    } catch (err) {
-      console.error('Failed to fetch notifications:', err);
-    } finally {
-      setLoadingNotifs(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchNotifications();
-    const interval = setInterval(fetchNotifications, 12000);
-    return () => clearInterval(interval);
-  }, [user]);
+      return notifs;
+  }, [inbox, sent, user?.role]);
 
   // Unread calculation
   const unreadCount = notifications.filter(n => !readIds.includes(n.id)).length;

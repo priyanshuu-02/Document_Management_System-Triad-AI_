@@ -51,6 +51,8 @@ The rules live in `check_access()` in `app/services/doc_service.py`:
 3. **Approved request:** can open that one document.
 4. **Anyone else:** gets metadata only. OCR text is removed from responses and downloads return 403.
 
+For lists and search, `AccessContext` loads all of the user's approved and pending requests in one query. Each document is then checked in memory, so a request costs the same few queries whether it returns 1 document or 100.
+
 Other rules:
 - The authenticated user is loaded from the database on every request, so role and division changes take effect immediately.
 - Uploads are forced to the uploader's division; an upload targeting another division gets 403.
@@ -98,6 +100,9 @@ Results are newest first, capped at 100, and list the matched fields plus an OCR
 
 - **Same-origin API:** nginx proxies `/api`, so the browser never makes cross-origin calls and the frontend build has no backend URL in it.
 - **Start-up order:** Compose starts the backend only after MongoDB's health check passes, and the frontend only after the backend's. The backend retries the database connection for 30 seconds and refuses to start without one.
+- **Free-tier sleep:** Render answers 502/503 while a sleeping service wakes. The frontend sends a health check as soon as the page opens, and retries 502/503 responses every 5 seconds for up to about 50 seconds, so a first visit after idle loads slowly instead of failing.
+- **Polling:** the sidebar badge, notification bell, dashboard counter and Access Requests page share one poller (`src/api/accessRequestsStore.js`). It runs every 15 seconds, or every 5 seconds while the requests page is open, and pauses while the browser tab is hidden.
+- **Render DNS:** the frontend's nginx looks up the backend through public DNS (`NGINX_RESOLVER`). Render's internal DNS points `*.onrender.com` at its private network, which free services can't receive traffic on.
 - **Seeding:** the container runs `seed_db.py` before gunicorn. It creates the default fields only when none exist, and accounts only when they are missing.
 
 ## Possible next steps

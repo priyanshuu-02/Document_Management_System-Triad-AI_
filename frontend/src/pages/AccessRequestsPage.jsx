@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import client from '../api/client';
+import { useAccessRequests } from '../api/accessRequestsStore';
 import { useAuth } from '../context/AuthContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
@@ -18,6 +19,9 @@ import {
   MessageSquare
 } from 'lucide-react';
 
+// Faster updates while reviewing requests; the rest of the app polls every 15 s.
+const REQUESTS_PAGE_POLL_MS = 5000;
+
 export default function AccessRequestsPage() {
   const { user } = useAuth();
   const [searchParams] = useSearchParams();
@@ -25,9 +29,6 @@ export default function AccessRequestsPage() {
   const highlightId = searchParams.get('highlight');
 
   const [activeTab, setActiveTab] = useState(urlTab === 'sent' ? 'sent' : 'incoming'); // 'incoming' or 'sent'
-  const [incomingRequests, setIncomingRequests] = useState([]);
-  const [sentRequests, setSentRequests] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [statusFilter, setStatusFilter] = useState('all');
   const [actionMessage, setActionMessage] = useState(null);
@@ -38,39 +39,29 @@ export default function AccessRequestsPage() {
     }
   }, [urlTab]);
 
-  const fetchRequests = async (isBackground = false) => {
-    if (!isBackground) setLoading(true);
-    try {
-      const [inboxRes, sentRes] = await Promise.all([
-        client.get('/access/inbox'),
-        client.get('/access/my-requests')
-      ]);
-      const incoming = inboxRes.data?.requests || [];
-      const sent = sentRes.data?.requests || [];
-      setIncomingRequests(incoming);
-      setSentRequests(sent);
+  // Shared store; while this page is open the app-wide poller runs every 5 s.
+  const { inbox: incomingRequests, sent: sentRequests, loaded, refresh } =
+    useAccessRequests(user?.id, REQUESTS_PAGE_POLL_MS);
+  const loading = !loaded;
 
-      // Smart tab selection on initial load:
-      // If user has pending sent requests and no incoming requests, switch to sent tab
-      if (!isBackground && incoming.length === 0 && sent.length > 0) {
-        setActiveTab('sent');
-      }
-    } catch (err) {
-      console.error('Failed to fetch access requests:', err);
+  const fetchRequests = async () => {
+    try {
+      await refresh();
     } finally {
-      if (!isBackground) setLoading(false);
       setRefreshing(false);
     }
   };
 
+  // Smart tab selection once data first arrives (unless the URL picked a tab):
+  // with no incoming requests but some sent ones, open the Sent tab.
+  const tabChosen = useRef(urlTab === 'sent' || urlTab === 'incoming');
   useEffect(() => {
-    fetchRequests(false);
-    // Real-time polling every 3 seconds to eliminate delay
-    const interval = setInterval(() => {
-      fetchRequests(true);
-    }, 3000);
-    return () => clearInterval(interval);
-  }, []);
+    if (!loaded || tabChosen.current) return;
+    tabChosen.current = true;
+    if (incomingRequests.length === 0 && sentRequests.length > 0) {
+      setActiveTab('sent');
+    }
+  }, [loaded, incomingRequests, sentRequests]);
 
   const handleApprove = async (requestId, docName) => {
     try {

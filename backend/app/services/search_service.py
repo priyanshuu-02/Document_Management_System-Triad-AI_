@@ -14,7 +14,7 @@ import logging
 
 from app.db import get_db
 from app.models.document import DocumentModel
-from app.services.doc_service import check_access, approved_doc_ids
+from app.services.doc_service import AccessContext
 
 logger = logging.getLogger(__name__)
 
@@ -33,14 +33,14 @@ def _snippet(text: str, needle: str) -> str:
 
 class SearchService:
     @staticmethod
-    def build_query(clean_query: str, current_user: dict, db) -> dict:
+    def build_query(clean_query: str, access: AccessContext) -> dict:
         pattern = {"$regex": re.escape(clean_query), "$options": "i"}
 
-        if current_user and current_user.get("role") == "admin":
+        if access.is_admin:
             ocr_clause = {"ocr_text": pattern}
         else:
-            readable_scope = [{"division": (current_user or {}).get("division")}]
-            approved = approved_doc_ids(db, current_user)
+            readable_scope = [{"division": access.division}]
+            approved = access.approved_object_ids()
             if approved:
                 readable_scope.append({"_id": {"$in": approved}})
             ocr_clause = {"$and": [{"ocr_text": pattern}, {"$or": readable_scope}]}
@@ -62,12 +62,14 @@ class SearchService:
         db = get_db()
         user_division = current_user.get("division") if current_user else None
 
-        query = SearchService.build_query(clean_query, current_user, db)
+        # One query loads the user's requests; every result is then checked in memory.
+        access = AccessContext(db, current_user)
+        query = SearchService.build_query(clean_query, access)
         docs = list(db.documents.find(query).sort("created_at", -1).limit(MAX_RESULTS))
 
         results = []
         for doc in docs:
-            can_download, has_pending = check_access(db, doc, current_user)
+            can_download, has_pending = access.check(doc)
 
             # Report which fields matched so the UI can explain each result.
             matched_in = []
